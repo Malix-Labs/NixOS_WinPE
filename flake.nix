@@ -218,6 +218,82 @@
                   ${mkCase false}
                   touch $out
                 '';
+
+            auto-boot-service-test =
+              let
+                evalEnabled = evalNixos [
+                  nixosModules.default
+                  {
+                    hardware.winpe = {
+                      enable = true;
+                      payloads.testPayload = {
+                        package = pkgs.writeText "GKCN65WW.exe" "payload-content";
+                        targetFileName = "GKCN65WW.exe";
+                      };
+                    };
+                  }
+                ];
+                evalDisabled = evalNixos [
+                  nixosModules.default
+                  {
+                    hardware.winpe = {
+                      enable = true;
+                      autoBootOnUpdate = false;
+                      payloads.testPayload = {
+                        package = pkgs.writeText "GKCN65WW.exe" "payload-content";
+                        targetFileName = "GKCN65WW.exe";
+                      };
+                    };
+                  }
+                ];
+                mockEfibootmgr = pkgs.writeShellScriptBin "efibootmgr" ''
+                  if [ "$#" -eq 0 ]; then
+                    cat "$EFISTATE"
+                  elif [ "$1" = "-n" ]; then
+                    sed -i "/BootNext/d" "$EFISTATE"
+                    echo "BootNext: $2" >> "$EFISTATE"
+                  fi
+                '';
+                autoBootScript = pkgs.writeScript "winpe-auto-boot-script.sh" evalEnabled.config.systemd.services.winpe-auto-boot.script;
+              in
+              assert evalEnabled.config.hardware.winpe.autoBootOnUpdate == true;
+              assert evalEnabled.config.systemd.services ? winpe-auto-boot;
+              assert !(evalDisabled.config.systemd.services ? winpe-auto-boot);
+              pkgs.runCommand "test-auto-boot-service"
+                {
+                  nativeBuildInputs = with pkgs; [
+                    bash
+                    coreutils
+                    gnugrep
+                    gnused
+                    mockEfibootmgr
+                  ];
+                }
+                ''
+                  # Set up mock sysfs environment
+                  MOCK_SYS="$PWD/sys/class/dmi/id"
+                  mkdir -p "$MOCK_SYS"
+                  export SYSFS_DMI_DIR="$MOCK_SYS"
+                  export EFISTATE="$PWD/efistate"
+
+                  # Edge Case 1: Outdated BIOS -> Schedules BootNext to WinPE (0000)
+                  echo -e "BootCurrent: 0005\nBootOrder: 0005,0000\nBoot0000* WinPE\nBoot0005* Linux" > "$EFISTATE"
+                  echo "GKCN64WW" > "$MOCK_SYS/bios_version"
+                  bash -e "${autoBootScript}"
+                  grep "BootNext: 0000" "$EFISTATE"
+
+                  # Edge Case 2: Already up to date BIOS -> Does not change BootNext
+                  sed -i "/BootNext/d" "$EFISTATE"
+                  echo "GKCN65WW" > "$MOCK_SYS/bios_version"
+                  bash -e "${autoBootScript}"
+                  ! grep "BootNext" "$EFISTATE"
+
+                  # Edge Case 3: No WinPE UEFI entry -> Exits gracefully without failure
+                  sed -i "/WinPE/d" "$EFISTATE"
+                  bash -e "${autoBootScript}"
+
+                  touch $out
+                '';
           };
 
           pre-commit.settings.hooks = {

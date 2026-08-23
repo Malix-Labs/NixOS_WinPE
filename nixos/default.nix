@@ -80,6 +80,12 @@ in
         default = true;
       };
 
+    autoBootOnUpdate =
+      lib.mkEnableOption "automatic scheduling of one-time UEFI BootNext into WinPE on system switch when new firmware is staged"
+      // {
+        default = true;
+      };
+
     payloads = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule (
@@ -151,5 +157,72 @@ in
         argument = "${p.package}";
       };
     }) activePayloads);
+
+    systemd.services.winpe-auto-boot = lib.mkIf (cfg.autoBootOnUpdate && activePayloads != { }) {
+      description = "Schedule one-time UEFI BootNext into WinPE when new firmware is staged";
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "systemd-tmpfiles-setup.service"
+        "local-fs.target"
+      ];
+      path = with pkgs; [
+        efibootmgr
+        coreutils
+        gnugrep
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script =
+        let
+          checkPayload = p: ''
+            PKG_VERSION="${lib.getVersion p.package}"
+            TARGET_NAME="${p.targetFileName}"
+            if [ -n "$CURRENT_BIOS" ]; then
+              case "$TARGET_NAME" in
+                *"$CURRENT_BIOS"*)
+                  ;;
+                *)
+                  if [ "$CURRENT_BIOS" != "$PKG_VERSION" ]; then
+                    echo "Firmware payload $TARGET_NAME (version $PKG_VERSION) does not match current BIOS ($CURRENT_BIOS)."
+                    NEEDS_UPDATE=1
+                  fi
+                  ;;
+              esac
+            else
+              NEEDS_UPDATE=1
+            fi
+          '';
+        in
+        ''
+          WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || true)
+          if [ -z "$WINPE_BOOT_NUM" ]; then
+            echo "WinPE UEFI boot entry not found; skipping BootNext scheduling."
+            exit 0
+          fi
+
+          CURRENT_BIOS=""
+          SYSFS_DMI="''${SYSFS_DMI_DIR:-/sys/class/dmi/id}"
+          if [ -r "$SYSFS_DMI/bios_version" ]; then
+            CURRENT_BIOS=$(cat "$SYSFS_DMI/bios_version" | tr -d '[:space:]')
+          fi
+
+          NEEDS_UPDATE=0
+          ${lib.concatStringsSep "\n" (lib.mapAttrsToList (_: checkPayload) activePayloads)}
+
+          if [ "$NEEDS_UPDATE" -eq 1 ]; then
+            CURRENT_BOOTNEXT=$(efibootmgr | grep -i "BootNext" | grep -o "[0-9a-fA-F]\{4\}" || true)
+            if [ "$CURRENT_BOOTNEXT" = "$WINPE_BOOT_NUM" ]; then
+              echo "BootNext is already set to WinPE (Boot$WINPE_BOOT_NUM)."
+            else
+              echo "Scheduling one-time boot into WinPE (Boot$WINPE_BOOT_NUM) on next restart..."
+              efibootmgr -n "$WINPE_BOOT_NUM"
+            fi
+          else
+            echo "All staged firmware payloads match the current BIOS ($CURRENT_BIOS). No update needed."
+          fi
+        '';
+    };
   };
 }
