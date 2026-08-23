@@ -23,9 +23,16 @@ let
         set FOUND_PAYLOAD=1
         echo Found firmware package: %%~nxf
         echo Staging firmware update...
-        "%%f" -s -noconfirm -n -b /SILENT /VERYSILENT /SUPPRESSMSGBOXES
+        "%%f"
+        if errorlevel 1 (
+            echo.
+            echo [ERROR] Firmware flash utility failed with error code %errorlevel%!
+            echo Opening command prompt for manual diagnostics...
+            cmd.exe
+            goto :done
+        )
         echo.
-        echo Staging complete. Rebooting system in 5 seconds...
+        echo Flash staging completed. Rebooting system in 5 seconds...
         timeout /t 5
         wpeutil reboot
         goto :done
