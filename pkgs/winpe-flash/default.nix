@@ -1,4 +1,18 @@
 { pkgs }:
+let
+  startnetScript = pkgs.writeScript "startnet.cmd" ''
+    @echo off
+    wpeinit
+    for %%d in (c d e f g h i j k l m n o p q r s t u v w x y z) do (
+        if exist %%d:\autorun.cmd (
+            call %%d:\autorun.cmd
+            goto :done
+        )
+    )
+    cmd.exe
+    :done
+  '';
+in
 pkgs.writeShellApplication {
   name = "winpe-flash";
 
@@ -6,6 +20,7 @@ pkgs.writeShellApplication {
     efibootmgr
     util-linux
     coreutils
+    wimlib
   ];
 
   text = ''
@@ -68,6 +83,13 @@ pkgs.writeShellApplication {
         echo "❌ Error: AC power adapter is not connected!"
         echo "Please plug in your laptop charger before flashing firmware."
         exit 1
+      fi
+
+      # Ensure boot.wim has the automated startnet hook to execute autorun.cmd
+      if [ -f /mnt/WinPE/sources/boot.wim ]; then
+        echo "Ensuring WinPE startup hook is configured in boot.wim..."
+        wimlib-imagex update /mnt/WinPE/sources/boot.wim 1 --command="add ${startnetScript} /Windows/System32/startnet.cmd" >/dev/null 2>&1 || true
+        echo "WinPE startup hook verified."
       fi
 
       # Locate WinPE boot number
