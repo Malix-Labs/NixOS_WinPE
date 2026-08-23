@@ -74,6 +74,12 @@ in
       description = "The winpe-flash CLI package to install.";
     };
 
+    cleanFirmwareDirectory =
+      lib.mkEnableOption "automatic purging of unmanaged files in the WinPE firmware staging directory on system switch"
+      // {
+        default = true;
+      };
+
     payloads = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule (
@@ -132,22 +138,16 @@ in
     systemd.tmpfiles.settings."10-winpe" = {
       "${cfg.mountPoint}/autorun.cmd"."C+" = {
         mode = "0755";
-        user = "root";
-        group = "root";
         argument = "${cfg.autorunScript}";
       };
-      "${cfg.mountPoint}/firmware"."d" = {
+      "${cfg.mountPoint}/firmware".${if cfg.cleanFirmwareDirectory then "D" else "d"} = {
         mode = "0755";
-        user = "root";
-        group = "root";
       };
     }
     // (lib.mapAttrs' (_: p: {
       name = "${cfg.mountPoint}/firmware/${p.targetFileName}";
       value."C+" = {
         mode = "0755";
-        user = "root";
-        group = "root";
         argument = "${p.package}";
       };
     }) activePayloads);

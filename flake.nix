@@ -164,6 +164,60 @@
                 eval.config.disko.devices.disk.main.content.partitions.WinPE.content.mountpoint.content
                 == "/mnt/WinPE";
               pkgs.runCommand "test-disko-module" { } "touch $out";
+
+            clean-firmware-directory-test =
+              let
+                mkCase =
+                  clean:
+                  let
+                    s = lib.boolToString clean;
+                    mountPoint = "@DIR@";
+                    eval = evalNixos [
+                      nixosModules.default
+                      {
+                        hardware.winpe = {
+                          enable = true;
+                          inherit mountPoint;
+                          cleanFirmwareDirectory = clean;
+                          payloads.testPayload = {
+                            package = pkgs.writeText "GKCN65WW.exe" "payload-content";
+                            targetFileName = "GKCN65WW.exe";
+                          };
+                        };
+                      }
+                    ];
+                    rules = lib.concatLists (
+                      lib.mapAttrsToList (
+                        path: types:
+                        lib.mapAttrsToList (
+                          type: rule: "${type} ${path} ${rule.mode} ${rule.user} ${rule.group} ${rule.age} ${rule.argument}"
+                        ) types
+                      ) eval.config.systemd.tmpfiles.settings."10-winpe"
+                    );
+                    conf = pkgs.writeText "10-winpe-${s}.conf" (lib.concatStringsSep "\n" rules);
+                  in
+                  ''
+                    dir="$PWD/winpe-${s}/firmware"
+                    mkdir -p "$dir"
+                    echo "old" > "$dir/stale.exe"
+                    substitute ${conf} "$PWD/conf-${s}.conf" --replace-fail "@DIR@" "$PWD/winpe-${s}"
+                    fakeroot systemd-tmpfiles --remove --create "$PWD/conf-${s}.conf"
+                    ${if clean then "[ ! -f $dir/stale.exe ]" else "[ -f $dir/stale.exe ]"}
+                    [ -f $dir/GKCN65WW.exe ]
+                  '';
+              in
+              pkgs.runCommand "test-clean-firmware-directory"
+                {
+                  nativeBuildInputs = with pkgs; [
+                    systemd
+                    fakeroot
+                  ];
+                }
+                ''
+                  ${mkCase true}
+                  ${mkCase false}
+                  touch $out
+                '';
           };
 
           pre-commit.settings.hooks = {
