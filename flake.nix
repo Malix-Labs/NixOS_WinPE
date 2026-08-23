@@ -91,7 +91,7 @@
           checks = {
             inherit winpe-flash;
 
-            all-profiles-test =
+            all-profiles =
               let
                 profiles = lib.filterAttrs (name: _: name != "default" && name != "winpe") nixosModules;
 
@@ -113,37 +113,35 @@
                 ${lib.concatStringsSep "\n" (map (p: "ln -s ${p} $out/${p.name}") (lib.attrValues profileChecks))}
               '';
 
-            wim-injection-test =
-              pkgs.runCommand "test-wim-injection" { nativeBuildInputs = [ pkgs.wimlib ]; }
-                ''
-                  mkdir -p root/Windows/System32
-                  echo "wpeinit" > root/Windows/System32/startnet.cmd
-                  wimcapture root test.wim
+            wim-injection = pkgs.runCommand "test-wim-injection" { nativeBuildInputs = [ pkgs.wimlib ]; } ''
+              mkdir -p root/Windows/System32
+              echo "wpeinit" > root/Windows/System32/startnet.cmd
+              wimcapture root test.wim
 
-                  wimupdate test.wim 1 --command="add ${pkgs.writeScript "startnet.cmd" ''
-                    @echo off
-                    wpeinit
-                    for %%d in (c d e f g h i j k l m n o p q r s t u v w x y z) do (
-                        if exist %%d:\autorun.cmd (
-                            call %%d:\autorun.cmd
-                            goto :done
-                        )
+              wimupdate test.wim 1 --command="add ${pkgs.writeScript "startnet.cmd" ''
+                @echo off
+                wpeinit
+                for %%d in (c d e f g h i j k l m n o p q r s t u v w x y z) do (
+                    if exist %%d:\autorun.cmd (
+                        call %%d:\autorun.cmd
+                        goto :done
                     )
-                    cmd.exe
-                    :done
-                  ''} /Windows/System32/startnet.cmd"
+                )
+                cmd.exe
+                :done
+              ''} /Windows/System32/startnet.cmd"
 
-                  mkdir -p extracted
-                  wimextract test.wim 1 /Windows/System32/startnet.cmd --dest-dir=extracted
+              mkdir -p extracted
+              wimextract test.wim 1 /Windows/System32/startnet.cmd --dest-dir=extracted
 
-                  grep -Fq "wpeinit" extracted/startnet.cmd
-                  grep -Fq "for %%d in" extracted/startnet.cmd
-                  grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
+              grep -Fq "wpeinit" extracted/startnet.cmd
+              grep -Fq "for %%d in" extracted/startnet.cmd
+              grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
 
-                  touch $out
-                '';
+              touch $out
+            '';
 
-            disko-module-test =
+            disko-module =
               let
                 eval = evalNixos [
                   nixosModules.default
@@ -165,7 +163,7 @@
                 == "/mnt/WinPE";
               pkgs.runCommand "test-disko-module" { } "touch $out";
 
-            clean-firmware-directory-test =
+            clean-firmware-directory =
               let
                 mkCase =
                   clean:
@@ -219,7 +217,60 @@
                   touch $out
                 '';
 
-            auto-boot-service-test =
+            autorun =
+              let
+                eval = evalNixos [
+                  nixosModules.default
+                  {
+                    hardware.winpe.enable = true;
+                  }
+                ];
+                autorun = eval.config.hardware.winpe.autorunScript;
+              in
+              pkgs.runCommand "test-autorun"
+                {
+                  nativeBuildInputs = with pkgs; [
+                    wineWow64Packages.minimal
+                    coreutils
+                    gnugrep
+                    gnused
+                  ];
+                }
+                ''
+                  export WINEDEBUG=-all
+                  export WINEPREFIX="$PWD/wine"
+                  wineboot -u
+                  wineserver -w
+
+                  mkdir -p "$WINEPREFIX/drive_c/winpe/firmware"
+                  cp ${autorun} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|cmd.exe|echo [MOCK] dropped to cmd.exe|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+
+                  # Test Case 1: Mock executable that succeeds (exit code 0)
+                  cat << "EOF" > "$WINEPREFIX/drive_c/winpe/firmware/mock.exe"
+                  @echo off
+                  echo Mock flasher success
+                  exit /b 0
+                  EOF
+
+                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+
+                  # Test Case 2: Mock executable that fails (exit code 3)
+                  cat << "EOF" > "$WINEPREFIX/drive_c/winpe/firmware/mock.exe"
+                  @echo off
+                  echo Mock flasher error simulated
+                  exit /b 3
+                  EOF
+
+                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+
+                  wineserver -k
+                  touch $out
+                '';
+
+            auto-boot-service =
               let
                 evalEnabled = evalNixos [
                   nixosModules.default

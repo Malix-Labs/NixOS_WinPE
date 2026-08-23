@@ -23,7 +23,7 @@ let
         set FOUND_PAYLOAD=1
         echo Found firmware package: %%~nxf
         echo Staging firmware update...
-        "%%f"
+        call "%%f"
         if errorlevel 1 (
             echo.
             echo [ERROR] Firmware flash utility failed with error code %errorlevel%!
