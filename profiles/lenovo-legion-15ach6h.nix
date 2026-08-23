@@ -16,12 +16,13 @@ in
       enable = lib.mkDefault true;
       payloads."lenovo-bios" = {
         enable = lib.mkDefault true;
-        package = biosPackage.src;
-        targetFileName = biosPackage.src.name;
+        package = biosPackage;
+        targetFileName = "GKCN65WW.exe";
         silentFlags = [
-          "/SILENT"
-          "/VERYSILENT"
-          "/SUPPRESSMSGBOXES"
+          "-s"
+          "-noconfirm"
+          "-n"
+          "-b"
         ];
       };
     };

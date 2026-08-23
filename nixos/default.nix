@@ -22,8 +22,8 @@ let
     for %%f in ("%~dp0firmware\*.exe") do (
         set FOUND_PAYLOAD=1
         echo Found firmware package: %%~nxf
-        echo Staging firmware update in silent mode...
-        "%%f" /SILENT /VERYSILENT /SUPPRESSMSGBOXES
+        echo Staging firmware update...
+        "%%f" -s -noconfirm -n -b /SILENT /VERYSILENT /SUPPRESSMSGBOXES
         echo.
         echo Staging complete. Rebooting system in 5 seconds...
         timeout /t 5

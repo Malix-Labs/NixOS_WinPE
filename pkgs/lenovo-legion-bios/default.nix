@@ -2,6 +2,7 @@
   lib,
   stdenvNoCC,
   fetchurl,
+  innoextract,
   writeShellApplication,
   curl,
   nix,
@@ -13,17 +14,23 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   version = "65"; # GKCN65WW
 
   src = fetchurl {
-    name = "gkcn${finalAttrs.version}ww.exe";
+    name = "gkcn${finalAttrs.version}ww-installer.exe";
     url = "https://download.lenovo.com/consumer/mobiles/gkcn${finalAttrs.version}ww.exe";
     hash = "sha256-QXb3lKgR+ILqMSwNjz68cR20xaixvJLccwGJjTIgwaA=";
   };
 
-  dontUnpack = true;
+  nativeBuildInputs = [ innoextract ];
+
+  unpackPhase = ''
+    runHook preUnpack
+    innoextract -e $src
+    runHook postUnpack
+  '';
 
   installPhase = ''
     runHook preInstall
-    mkdir -p $out
-    cp $src $out/gkcn${finalAttrs.version}ww.exe
+    EXE=$(find . -maxdepth 2 -iname "GKCN*WW.exe" | head -n1)
+    cp "$EXE" $out
     runHook postInstall
   '';
 
