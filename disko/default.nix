@@ -20,4 +20,6 @@ in
   disko.devices.disk.main.content.partitions.WinPE = lib.mapAttrsRecursive (
     _: lib.mkDefault
   ) partition;
+
+  hardware.winpe.autoMount = lib.mkDefault false;
 }
