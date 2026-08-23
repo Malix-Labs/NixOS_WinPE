@@ -28,7 +28,7 @@ pkgs.writeShellApplication {
       echo "[1] Partition Status:"
       if findmnt /mnt/WinPE >/dev/null 2>&1; then
         echo "  /mnt/WinPE is mounted:"
-        lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS /mnt/WinPE
+        findmnt -o SOURCE,FSTYPE,SIZE,USED,AVAIL,TARGET /mnt/WinPE
       else
         echo "  /mnt/WinPE is NOT currently mounted."
       fi
