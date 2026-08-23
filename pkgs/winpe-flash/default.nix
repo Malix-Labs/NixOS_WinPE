@@ -1,0 +1,134 @@
+{ pkgs }:
+pkgs.writeShellApplication {
+  name = "winpe-flash";
+
+  runtimeInputs = with pkgs; [
+    efibootmgr
+    util-linux
+    coreutils
+  ];
+
+  text = ''
+    set -euo pipefail
+
+    show_help() {
+      echo "NixOS WinPE Firmware Flasher CLI"
+      echo
+      echo "Usage: winpe-flash <command>"
+      echo
+      echo "Commands:"
+      echo "  status      Check WinPE partition, firmware payload, and UEFI boot status"
+      echo "  reboot      Trigger a one-time boot into WinPE on next restart"
+      echo "  help        Show this help message"
+    }
+
+    cmd_status() {
+      echo "=== WinPE Subsystem Status ==="
+      echo
+      echo "[1] Partition Status:"
+      if findmnt /mnt/WinPE >/dev/null 2>&1; then
+        echo "  /mnt/WinPE is mounted:"
+        lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS /mnt/WinPE
+      else
+        echo "  /mnt/WinPE is NOT currently mounted."
+      fi
+      echo
+
+      echo "[2] Staged Firmware Payloads:"
+      if [ -d /mnt/WinPE/firmware ]; then
+        ls -lh /mnt/WinPE/firmware/
+      else
+        echo "  No /mnt/WinPE/firmware directory found."
+      fi
+      echo
+
+      echo "[3] UEFI Boot Entries:"
+      efibootmgr | grep -E "Boot[0-9]{4}|BootOrder" || true
+    }
+
+    cmd_reboot() {
+      echo "=== Triggering WinPE One-Time Boot ==="
+
+      if [ "''${EUID:-$(id -u)}" -ne 0 ]; then
+        echo "❌ Error: Modifying UEFI boot variables requires root privileges."
+        echo "Please run: sudo winpe-flash reboot"
+        exit 1
+      fi
+
+      # AC power verification guard
+      AC_CONNECTED=0
+      for ac in /sys/class/power_supply/A*/online; do
+        if [ -f "$ac" ] && [ "$(cat "$ac")" -eq 1 ]; then
+          AC_CONNECTED=1
+          break
+        fi
+      done
+
+      if [ "$AC_CONNECTED" -eq 0 ] && [ -d /sys/class/power_supply ]; then
+        echo "❌ Error: AC power adapter is not connected!"
+        echo "Please plug in your laptop charger before flashing firmware."
+        exit 1
+      fi
+
+      # Locate WinPE boot number
+      WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || true)
+
+      if [ -z "$WINPE_BOOT_NUM" ]; then
+        echo "Error: Could not find 'WinPE' boot entry in efibootmgr!"
+        echo "Please ensure the UEFI boot entry is registered."
+        exit 1
+      fi
+
+      echo "Found WinPE UEFI entry: Boot$WINPE_BOOT_NUM"
+      echo "Setting BootNext to $WINPE_BOOT_NUM..."
+      efibootmgr -n "$WINPE_BOOT_NUM"
+
+      echo
+      echo "============================================================"
+      echo "              ⚠️  FIRMWARE FLASH SAFETY NOTICE              "
+      echo "============================================================"
+      echo " 1. AC POWER: Keep your charger firmly connected."
+      echo " 2. TPM / LUKS: Updating BIOS alters PCR 0. If you use TPM"
+      echo "    auto-unlock, have your manual LUKS passphrase ready for"
+      echo "    the first reboot after the flash completes."
+      echo " 3. DO NOT INTERRUPT: The motherboard flash takes ~2 minutes."
+      echo "    Fans will spin at max speed. Do NOT power off or close lid."
+      echo "============================================================"
+      echo
+      echo "Next boot is set to WinPE."
+      read -r -p "Reboot now into WinPE flasher? [y/N]: " confirm
+      if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Rebooting..."
+        reboot
+      else
+        echo "Reboot postponed. BootNext $WINPE_BOOT_NUM will trigger on your next restart."
+      fi
+    }
+
+    case "''${1:-help}" in
+      status)
+        cmd_status
+        ;;
+      reboot|flash)
+        cmd_reboot
+        ;;
+      help|--help|-h)
+        show_help
+        ;;
+      *)
+        echo "Unknown command: $1"
+        show_help
+        exit 1
+        ;;
+    esac
+  '';
+
+  meta = {
+    description = "CLI utility to inspect and trigger WinPE firmware updates on NixOS";
+    homepage = "https://github.com/Malix-Labs/NixOS_WinPE";
+    license = pkgs.lib.licenses.gpl3Plus;
+    maintainers = with pkgs.lib.maintainers; [ malix ];
+    platforms = pkgs.lib.platforms.linux;
+    mainProgram = "winpe-flash";
+  };
+}

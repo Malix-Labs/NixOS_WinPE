@@ -1,130 +1,168 @@
-# [@Malix-Labs](https://github.com/Malix-Labs) Own [Repository Template](https://docs.github.com/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template)
+# NixOS_WinPE 🚀
 
-After creating a repository from the [@Malix-Labs](https://github.com/Malix-Labs) [repository template](https://docs.github.com/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template), this file is to be cleared.
-It is accessible online at <https://github.com/Malix-Labs/Template#readme>
+**Declarative, bare-metal Windows PE partition and automated firmware updater for NixOS.**
 
-## Usage
+[![Flake Check](https://img.shields.io/badge/Nix_Flake-passing-brightgreen.svg?logo=nixos&logoColor=white)](#)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](../LICENSE.md)
 
-1. [ ] [Create a repository from this template](https://docs.github.com/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template#creating-a-repository-from-a-template)
-2. [ ] Search "`github.com/Malix-Labs/<REPOSITORY>`" and replace all "`<REPOSITORY>`" by the Repository name
-3. [ ] Copy all [this repository GitHub Settings](https://github.com/Malix-Labs/Template#github-settings)
-4. [ ] Copy all [this repository GitHub Labels](https://github.com/Malix-Labs/Template#github-labels)
+---
 
-## Features
+## 🎯 The Problem
 
-### Branching
+Many modern consumer laptops (e.g. **Lenovo Legion**, **ASUS ROG/TUF**, **Acer Predator**, **MSI**, **HP Omen**) do not publish BIOS, Embedded Controller (EC), or touchpad firmware updates to the Linux Vendor Firmware Service (**LVFS / `fwupd`**). 
 
-Inspired by [Trunk-Based Development](https://trunkbaseddevelopment.com/) / [GitHub Flow](https://docs.github.com/get-started/using-github/github-flow)
+Instead, OEMs distribute critical firmware and EC updates exclusively as Windows-only executables (`.exe`) containing proprietary flashing drivers (such as Insyde `H2OFFT64.sys`). When hardware glitches occur—such as the **ITE 8910 Embedded Controller lockup** on Lenovo Legion laptops—Linux users are typically forced to:
+1. Waste 50GB+ of storage on a permanent Windows dual-boot, or
+2. Find and burn an external USB recovery drive every time an update is released, or
+3. Attempt running updates inside a Virtual Machine (**which fails**, because hypervisors cannot access bare-metal SPI flash chips or physical ACPI/SMI registers).
 
-- **Default (`main`/`master`)**: the single source of truth, fully protected
-- **Issues (`issue/*`)**: short-lived branches for individual issues
-- **Archives (`archive/**/*`)**: branches for archival purposes
-- **Releases (`release/*`)**: branches for preparing a release
-	- **Releases' Issues (`release/*/issue/*`)**: issue work scoped under a specific release
-	- **Releases' Archives (`release/*/archive/**/*`)**: archival work scoped under a specific release
+**`NixOS_WinPE`** solves this by maintaining a lightweight (~2 GB), bare-metal, headless **Windows Preinstallation Environment (WinPE)** on your internal NVMe SSD, managed 100% declaratively through NixOS.
 
-### Tags
+---
 
-Optimized for [Continuous Deployment (CD)](https://wikipedia.org/wiki/Continuous_deployment)
+## 🏗️ Architecture & Workflow
 
-Using [Semantic Versioning (SemVer)](https://semver.org/) _(current: [v2](https://semver.org/spec/v2.0.0.html))_
+```
+[NixOS System] ──── (nh os switch) ────► 1. Fetches firmware payloads (pkgs.fetchurl)
+       │                                 2. Deploys autorun.cmd to /mnt/WinPE
+       │
+       ▼ (Run `winpe-flash reboot` or `sudo efibootmgr -n <ID> && reboot`)
+[UEFI Boots WinPE Partition into RAM]
+       │
+       ▼
+[WinPE automatically runs autorun.cmd]
+       │
+       ├──► Auto-discovers and silently stages firmware payload (.exe)
+       │
+       ▼
+[Motherboard executes hardware flash of BIOS & EC]
+       │
+       ▼
+[Automatically reboots straight back into NixOS]
+```
 
-Each push to the default branch should be tagged with a SemVer Tag
+---
 
-Non-SemVer Tags are not encouraged (at least not for long-lived purposes) but allowed
+## ✨ Features
 
-### GitHub Releases
+- **100% Declarative & Pure:** Zero binary blobs hosted in Git. Payloads are fetched on-demand using standard Nix `pkgs.fetchurl` with cryptographic SHA-256 integrity verification.
+- **Headless Automation:** Boots into WinPE in RAM, silently stages the firmware in NVRAM, and triggers the hardware flash without requiring a mouse or GUI interaction.
+- **Dynamic Auto-Discovery:** Batch runner automatically finds and executes any staged firmware executables without hardcoded paths.
+- **Disko Integration:** Provides modular Disko partition configurations for automated disk partitioning.
+- **CLI Utility (`winpe-flash`):** Built-in CLI tool to inspect status, check staged firmware, and trigger one-time reboots.
 
-Optimized for [Continuous Deployment (CD)](https://wikipedia.org/wiki/Continuous_deployment)
+---
 
-Each SemVer Tag pushed to the default branch is meant to be released
+## 🚀 Quickstart
 
-### Deployments
+### 1. Add Flake Input
 
-Optimized for [Continuous Deployment (CD)](https://wikipedia.org/wiki/Continuous_deployment)
+```nix
+# flake.nix
+{
+  inputs = {
+    nixpkgs.url = "tarball+https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
+    nixos-winpe = {
+      url = "github:Malix-Labs/NixOS_WinPE";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
-Each GitHub Release is meant to be deployed
+  outputs = { self, nixpkgs, nixos-winpe, ... }: {
+    nixosConfigurations.my-laptop = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        nixos-winpe.nixosModules.default
+        ./configuration.nix
+      ];
+    };
+  };
+}
+```
 
-Deployments are meant to be executed from a pipeline (preferably GitHub Workflow) triggered by the GitHub Deployments
+---
 
-### [Rulesets](https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets)
+### 2. Configure NixOS Module
 
-[Rulesets Files Directory](/.github/Rulesets) _([download](https://download-directory.github.io/?url=https://github.com/Malix-Labs/Template/tree/main/.github/Rulesets))_
+In your `configuration.nix`:
 
-| Type   | Name                               | Status | Bypass                                                                                                                                                                   | Targets                                                               | Rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | File                                                                |
-| ------ | ---------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Branch | Archives                           | Active | <ul><li>Repository admin _(Role)_ - Always allow</li><li>Maintainer _(Role)_ - Always allow</li><li>Dependabot _(App • github)_ - Always allow</li></ul>                 | <ul><li>+ `archive/**/*`</li><li>+ `release/*/archive/**/*`</li></ul> | <ul><li>Restrict updates</li><li>Restrict deletions</li><li>Block force pushes</li></ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [File](</.github/Rulesets/Archives.json>)                           |
-| Branch | Issues                             | Active | <ul><li>Repository admin _(Role)_ - Always allow</li><li>Maintainer _(Role)_ - Always allow</li><li>Dependabot _(App • github)_ - Always allow</li></ul>                 | <ul><li>+ `issue/*`</li><li>+ `release/*/issue/*`</li></ul>           | <ul><li>Restrict creations</li><li>Restrict deletions</li><li>Block force pushes</li></ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | [File](</.github/Rulesets/Issues.json>)                             |
-| Branch | Production - Constructive          | Active | <ul><li>Repository admin _(Role)_ - Always allow</li><li>Maintainer _(Role)_ - Allow for pull requests only</li><li>Dependabot _(App • github)_ - Always allow</li></ul> | <ul><li>+ Default</li><li>+ `release/*`</li></ul>                     | <ul><li>Restrict creations</li><li>Require deployments to succeed</li><li>Require signed commits</li><li>Require a pull request before merging<ul><li>Required approvals: 0</li><li>Dismiss stale pull request approvals when new commits are pushed</li><li>Require review from Code Owners</li><li>Require approval of the most recent reviewable push</li><li>Require conversation resolution before merging</li><li>Request pull request review from Copilot</li><li>Allowed merge methods<ul><li>Merge</li><li>Squash</li><li>Rebase</li></ul></li></ul></li><li>Require code scanning results<ul><li>CodeQL - High or higher - Errors</li></ul></li></ul> | [File](</.github/Rulesets/Production - Constructive.json>)          |
-| Branch | Production - Destructive           | Active | <ul><li>Repository admin _(Role)_ - Always allow</li></ul>                                                                                                               | <ul><li>+ Default</li><li>+ `release/*`</li></ul>                     | <ul><li>Restrict deletions</li><li>Block force pushes</li></ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | [File](</.github/Rulesets/Production - Destructive.json>)           |
-| Tag    | Semantic Versioning - Constructive | Active | <ul><li>Repository admin _(Role)_</li><li>Maintainer _(Role)_</li><li>Dependabot _(App • github)_</li></ul>                                                              | <ul><li>+ `v[0-9]*`</li></ul>                                         | <ul><li>Restrict creations</li><li>Restrict updates</li><li>Require deployments to succeed</li><li>Require signatures</li></ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | [File](</.github/Rulesets/Semantic Versioning - Constructive.json>) |
-| Tag    | Semantic Versioning - Destructive  | Active | <ul><li>Repository admin _(Role)_</li></ul>                                                                                                                              | <ul><li>+ `v[0-9]*`</li></ul>                                         | <ul><li>Restrict deletions</li><li>Block force pushes</li></ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | [File](</.github/Rulesets/Semantic Versioning - Destructive.json>)  |
+```nix
+{ pkgs, ... }:
+{
+  hardware.winpe = {
+    enable = true;
+    mountPoint = "/mnt/WinPE";
+    partitionLabel = "WinPE";
 
-### [GitHub Labels](https://docs.github.com/issues/using-labels-and-milestones-to-track-work/managing-labels)
+    payloads = {
+      # Example: Lenovo Legion 5 15ACH6H BIOS & EC update
+      "lenovo-bios" = {
+        enable = true;
+        package = pkgs.fetchurl {
+          name = "gkcn65ww.exe";
+          url = "https://download.lenovo.com/consumer/mobiles/gkcn65ww.exe";
+          hash = "sha256-QXb3lKgR+ILqMSwNjz68cR20xaixvJLccwGJjTIgwaA=";
+        };
+        silentFlags = [ "/SILENT" "/VERYSILENT" "/SUPPRESSMSGBOXES" ];
+      };
+    };
+  };
 
-| Name        | Description | Color   |
-| ----------- | ----------- | ------- |
-| Feature     |             | #00FF00 |
-| Enhancement |             | #00FFFF |
-| Fix         |             | #FF8000 |
-| Update      |             | #FFFF00 |
-| Deprecation |             | #FF0000 |
+  # (Optional) Include the CLI management helper in system packages
+  environment.systemPackages = [
+    # nixos-winpe.packages.${pkgs.system}.default
+  ];
+}
+```
 
-### [GitHub Milestones](https://docs.github.com/issues/using-labels-and-milestones-to-track-work/creating-and-editing-milestones-for-issues-and-pull-requests)
+---
 
-- "v1.0.0"
+### 3. Disk Partitioning (Disko or Manual)
 
-### [GitHub Issue and Pull Request Template](https://docs.github.com/communities/using-templates-to-encourage-useful-issues-and-pull-requests/about-issue-and-pull-request-templates)
+#### Using Disko:
+```nix
+# In your disko configuration
+disko.devices.disk.main.content.partitions.WinPE = {
+  priority = 2;
+  size = "2G";
+  type = "0700"; # Microsoft Basic Data / FAT32
+  content = {
+    type = "filesystem";
+    format = "vfat";
+    mountpoint = "/mnt/WinPE";
+    mountOptions = [ "nofail" "fmask=0077" "dmask=0077" ];
+  };
+};
+```
 
-### [GitHub Project Template](https://docs.github.com/issues/planning-and-tracking-with-projects/managing-your-project/managing-project-templates-in-your-organization#copying-a-project-as-a-template)
+---
 
-The best starting [GitHub project template](https://docs.github.com/issues/planning-and-tracking-with-projects/managing-your-project/managing-project-templates-in-your-organization#copying-a-project-as-a-template) for any project scale
+### 4. Triggering a Firmware Update
 
-### [GitHub Discussions Sections & Categories](https://docs.github.com/discussions/managing-discussions-for-your-community/managing-categories-for-discussions)
+1. Ensure your laptop is **connected to AC power**.
+2. Run:
+   ```bash
+   nix run github:Malix-Labs/NixOS_WinPE#winpe-flash -- reboot
+   # or manually:
+   nix shell nixpkgs#efibootmgr -c sudo efibootmgr -n <WinPE_Boot_ID> && sudo reboot
+   ```
+3. The system will boot into WinPE, stage the update, and flash the motherboard.
 
-#### Sections
+---
 
-| Name        | Emoji | Categories |
-| ----------- | ----- | ---------- |
-| Development | 🧑‍💻     | None       |
-| Usage       | ✔️     | None       |
+## ⚠️ Security & TPM Considerations
 
-#### Categories
+> [!WARNING]
+> **TPM / Measured Boot & Secure Boot:**
+> Updating motherboard BIOS/EC firmware alters **PCR 0** (Core Firmware Executables). 
+> - If you use **Lanzaboote / TPM auto-unlock** on an encrypted LUKS drive, the system will prompt for your **manual LUKS recovery passphrase** on the first boot after the firmware flash before re-sealing to the new BIOS version.
+> - **Always verify your manual LUKS recovery passphrase before performing a firmware update.**
 
-| Name          | Emoji | Description | Format                | Section |
-| ------------- | ----- | ----------- | --------------------- | ------- |
-| Announcements | 📣     |             | Announcement          | None    |
-| General       | 💬     |             | Open-ended discussion | None    |
-| Questions     | ❔     |             | Question / Answer     | None    |
-| Poll          | 🗳️     |             | Poll                  | None    |
+> [!IMPORTANT]
+> **AC Power:** Never attempt a BIOS/EC flash on battery power.
 
-### [GitHub Discussion Category Form](https://docs.github.com/discussions/managing-discussions-for-your-community/creating-discussion-category-forms)
+---
 
-### GitHub Actions
+## 📄 License
 
-Optimized for [Trunk-Based Development](https://trunkbaseddevelopment.com/) / [GitHub Flow](https://docs.github.com/get-started/using-github/github-flow)
-
-- On issue create:
-	- [ ] [Create a branch named as the issue ID and link it to the created issue](https://docs.github.com/issues/tracking-your-work-with-issues/creating-a-branch-for-an-issue)
-		- On first commit push to this branch:
-			- [ ] Create a [draft pull request](https://docs.github.com/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-stage-of-a-pull-request#marking-a-pull-request-as-ready-for-review) to the [parent issue](https://docs.github.com/issues/managing-your-tasks-with-tasklists/about-tasklists#about-tasklists-and-issue-hierarchy:~:text=You%20can%20create-,parent,-and%20child%20relationships) if any, else master
-- On push to master:
-	- [ ] Create a [draft release](https://docs.github.com/repositories/releasing-projects-on-github/managing-releases-in-a-repository#:~:text=release%20later%2C%20click-,Save%20draft,-.%20You%20can%20then) with a tag annoted with the latest semver tag incremented by one patch
-
-### GitHub Files
-
-Fully featued with GitHub files
-
-### GitHub Settings
-
-GitHub Settings cannot be embeded in a [GitHub repository template](https://docs.github.com/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template) copied data, therefore, you have to [copy them manually](https://github.com/Malix-Labs/Template#github-settings)
-
-#### General
-
-##### Pull Requests
-
-- Allow merge commits
-  Default commit message: Pull request title
-- Allow squash merging
-  Default commit message: Default message
-- Allow rebase merging
+Licensed under [GPL-3.0](../LICENSE.md).
