@@ -3,6 +3,7 @@
   stdenvNoCC,
   fetchurl,
   innoextract,
+  file,
   writeShellApplication,
   curl,
   nix,
@@ -32,6 +33,22 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     EXE=$(find . -maxdepth 2 -iname "GKCN*WW.exe" | head -n1)
     cp "$EXE" $out
     runHook postInstall
+  '';
+
+  doInstallCheck = true;
+  nativeInstallCheckInputs = [
+    file
+    innoextract
+  ];
+
+  installCheckPhase = ''
+    runHook preInstallCheck
+    [ -s "$out" ]
+    file -b "$out" | grep -q "PE32"
+    ! innoextract -l "$out" >/dev/null 2>&1
+    FILE_SIZE=$(stat -c%s "$out")
+    [ "$FILE_SIZE" -gt 1048576 ] && [ "$FILE_SIZE" -lt 67108864 ]
+    runHook postInstallCheck
   '';
 
   passthru.updateScript = writeShellApplication {
