@@ -58,7 +58,7 @@ pkgs.writeShellApplication {
       echo
 
       echo "[3] UEFI Boot Entries:"
-      efibootmgr | grep -E "Boot[0-9]{4}|BootOrder" || true
+      efibootmgr | grep -E "Boot[0-9]{4}|BootOrder|BootNext" || :
     }
 
     cmd_reboot() {
@@ -88,12 +88,12 @@ pkgs.writeShellApplication {
       # Ensure boot.wim has the automated startnet hook to execute autorun.cmd
       if [ -f /mnt/WinPE/sources/boot.wim ]; then
         echo "Ensuring WinPE startup hook is configured in boot.wim..."
-        wimlib-imagex update /mnt/WinPE/sources/boot.wim 1 --command="add ${startnetScript} /Windows/System32/startnet.cmd" >/dev/null 2>&1 || true
+        wimlib-imagex update /mnt/WinPE/sources/boot.wim 1 --command="add ${startnetScript} /Windows/System32/startnet.cmd" >/dev/null 2>&1 || :
         echo "WinPE startup hook verified."
       fi
 
       # Locate WinPE boot number
-      WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || true)
+      WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || :)
 
       if [ -z "$WINPE_BOOT_NUM" ]; then
         echo "Error: Could not find 'WinPE' boot entry in efibootmgr!"

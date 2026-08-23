@@ -196,7 +196,7 @@ in
           '';
         in
         ''
-          WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || true)
+          WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || :)
           if [ -z "$WINPE_BOOT_NUM" ]; then
             echo "WinPE UEFI boot entry not found; skipping BootNext scheduling."
             exit 0
@@ -212,7 +212,7 @@ in
           ${lib.concatStringsSep "\n" (lib.mapAttrsToList (_: checkPayload) activePayloads)}
 
           if [ "$NEEDS_UPDATE" -eq 1 ]; then
-            CURRENT_BOOTNEXT=$(efibootmgr | grep -i "BootNext" | grep -o "[0-9a-fA-F]\{4\}" || true)
+            CURRENT_BOOTNEXT=$(efibootmgr | grep -i "BootNext" | grep -o "[0-9a-fA-F]\{4\}" || :)
             if [ "$CURRENT_BOOTNEXT" = "$WINPE_BOOT_NUM" ]; then
               echo "BootNext is already set to WinPE (Boot$WINPE_BOOT_NUM)."
             else
