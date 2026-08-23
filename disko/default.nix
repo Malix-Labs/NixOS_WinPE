@@ -7,10 +7,10 @@
     size = lib.mkDefault "2G";
     type = lib.mkDefault "0700"; # Microsoft Basic Data / FAT32
     content = {
-      type = "filesystem";
-      format = "vfat";
+      type = lib.mkDefault "filesystem";
+      format = lib.mkDefault "vfat";
       mountpoint = lib.mkDefault "/mnt/WinPE";
-      mountOptions = [
+      mountOptions = lib.mkDefault [
         "nofail"
         "fmask=0077"
         "dmask=0077"
