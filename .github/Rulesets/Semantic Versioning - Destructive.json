@@ -1,0 +1,31 @@
+{
+  "id": 6689726,
+  "name": "Semantic Versioning - Destructive",
+  "target": "tag",
+  "source_type": "Repository",
+  "source": "Malix-Labs/Template",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v[0-9]*"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "bypass_actors": [
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
+  ]
+}
