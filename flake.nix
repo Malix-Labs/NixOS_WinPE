@@ -92,7 +92,7 @@
             nixfmt.enable = true;
           };
 
-          formatter = config.pre-commit.settings.hooks.nixfmt.package;
+          formatter = pkgs.nixfmt-tree;
 
           devShells.default = config.pre-commit.devShell;
         };
