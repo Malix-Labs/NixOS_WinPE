@@ -237,6 +237,9 @@
                   ];
                 }
                 ''
+                  # Static Assertion: Ensure start /wait is present to prevent detached GUI execution
+                  grep -Fq 'start /wait "" "%%f"' ${autorun}
+
                   export WINEDEBUG=-all
                   export WINEPREFIX="$PWD/wine"
                   wineboot -u
@@ -264,6 +267,12 @@
                   exit /b 3
                   EOF
 
+                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+
+                  # Test Case 3: Real Windows GUI PE Binary (PE32/PE32+ GUI Subsystem)
+                  # Asserts that start /wait blocks until the GUI application exits
+                  rm -f "$WINEPREFIX/drive_c/winpe/firmware/mock.exe"
+                  cp "$WINEPREFIX/drive_c/windows/system32/notepad.exe" "$WINEPREFIX/drive_c/winpe/firmware/gui_payload.exe"
                   wine cmd.exe /c "C:\winpe\autorun.cmd"
 
                   wineserver -k
