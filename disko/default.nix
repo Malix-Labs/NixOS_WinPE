@@ -7,6 +7,10 @@ let
     content = {
       type = "filesystem";
       format = "vfat";
+      extraArgs = [
+        "-n"
+        "WinPE"
+      ];
       mountpoint = "/mnt/WinPE";
       mountOptions = [
         "nofail"
