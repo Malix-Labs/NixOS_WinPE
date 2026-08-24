@@ -158,6 +158,12 @@ in
       description = "The winpe-flash CLI package to install.";
     };
 
+    imagePackage = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      description = "Optional package containing the base WinPE filesystem to deploy declaratively to mountPoint.";
+    };
+
     cleanFirmwareDirectory =
       lib.mkEnableOption "automatic purging of unmanaged files in the WinPE firmware staging directory on system switch"
       // {
@@ -234,6 +240,12 @@ in
         mode = "0755";
       };
     }
+    // (lib.optionalAttrs (cfg.imagePackage != null) {
+      "${cfg.mountPoint}"."C+" = {
+        mode = "0755";
+        argument = "${cfg.imagePackage}";
+      };
+    })
     // (lib.mapAttrs' (_: p: {
       name = "${cfg.mountPoint}/firmware/${p.targetFileName}";
       value."C+" = {

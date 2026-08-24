@@ -164,12 +164,16 @@ pkgs.writeShellApplication {
     esac
   '';
 
-  meta = {
+  meta = with pkgs.lib; {
     description = "CLI utility to inspect and trigger WinPE firmware updates on NixOS";
     homepage = "https://github.com/Malix-Labs/NixOS_WinPE";
-    license = pkgs.lib.licenses.gpl3Plus;
-    maintainers = with pkgs.lib.maintainers; [ malix ];
-    platforms = pkgs.lib.platforms.linux;
+    license = licenses.gpl3Plus;
+    maintainers = with maintainers; [ malix ];
+    platforms = platforms.linux;
     mainProgram = "winpe-flash";
+  };
+
+  passthru = {
+    inherit startnetScript;
   };
 }

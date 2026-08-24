@@ -54,14 +54,18 @@
       perSystem =
         {
           config,
-          pkgs,
           system,
           ...
         }:
         let
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+          };
           inherit (nixpkgs) lib;
           inherit (self) nixosModules diskoModules;
           winpe-flash = pkgs.callPackage ./pkgs/winpe-flash { };
+          winpe-image = pkgs.callPackage ./pkgs/winpe-image { };
           lenovo-legion-15ach6h-bios = pkgs.callPackage ./pkgs/lenovo-legion-bios { };
 
           evalNixos =
@@ -84,7 +88,7 @@
         in
         {
           packages = {
-            inherit winpe-flash lenovo-legion-15ach6h-bios;
+            inherit winpe-flash winpe-image lenovo-legion-15ach6h-bios;
             default = winpe-flash;
           };
 
@@ -113,33 +117,28 @@
                 ${lib.concatStringsSep "\n" (map (p: "ln -s ${p} $out/${p.name}") (lib.attrValues profileChecks))}
               '';
 
-            wim-injection = pkgs.runCommand "test-wim-injection" { nativeBuildInputs = [ pkgs.wimlib ]; } ''
-              mkdir -p root/Windows/System32
-              echo "wpeinit" > root/Windows/System32/startnet.cmd
-              wimcapture root test.wim
+            wim-injection =
+              let
+                winpeFlashPkg = pkgs.callPackage ./pkgs/winpe-flash { };
+              in
+              pkgs.runCommand "test-wim-injection" { nativeBuildInputs = [ pkgs.wimlib ]; } ''
+                mkdir -p root/Windows/System32
+                echo "wpeinit" > root/Windows/System32/startnet.cmd
+                wimcapture root test.wim
 
-              wimupdate test.wim 1 --command="add ${pkgs.writeScript "startnet.cmd" ''
-                @echo off
-                wpeinit
-                for %%d in (c d e f g h i j k l m n o p q r s t u v w x y z) do (
-                    if exist %%d:\autorun.cmd (
-                        call %%d:\autorun.cmd
-                        goto :done
-                    )
-                )
-                cmd.exe
-                :done
-              ''} /Windows/System32/startnet.cmd"
+                wimupdate test.wim 1 --command="add ${winpeFlashPkg.startnetScript} /Windows/System32/startnet.cmd"
 
-              mkdir -p extracted
-              wimextract test.wim 1 /Windows/System32/startnet.cmd --dest-dir=extracted
+                mkdir -p extracted
+                wimextract test.wim 1 /Windows/System32/startnet.cmd --dest-dir=extracted
 
-              grep -Fq "wpeinit" extracted/startnet.cmd
-              grep -Fq "for %%d in" extracted/startnet.cmd
-              grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
+                grep -Fq "wpeinit" extracted/startnet.cmd
+                grep -Fq "automount enable" extracted/startnet.cmd
+                grep -Fq "diskpart /s" extracted/startnet.cmd
+                grep -Fq "for %%d in" extracted/startnet.cmd
+                grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
 
-              touch $out
-            '';
+                touch $out
+              '';
 
             disko-module =
               let
