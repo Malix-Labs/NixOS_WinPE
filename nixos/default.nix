@@ -159,10 +159,12 @@ in
     };
 
     imagePackage = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      description = "Optional package containing the base WinPE filesystem to deploy declaratively to mountPoint.";
+      type = lib.types.package;
+      default = pkgs.callPackage ../pkgs/winpe-image { };
+      description = "The base WinPE filesystem package deployed to mountPoint when populateImage is enabled.";
     };
+
+    populateImage = lib.mkEnableOption "automatic declarative population of the base WinPE image files to the mountPoint";
 
     cleanFirmwareDirectory =
       lib.mkEnableOption "automatic purging of unmanaged files in the WinPE firmware staging directory on system switch"
@@ -240,7 +242,7 @@ in
         mode = "0755";
       };
     }
-    // (lib.optionalAttrs (cfg.imagePackage != null) {
+    // (lib.optionalAttrs cfg.populateImage {
       "${cfg.mountPoint}"."C+" = {
         mode = "0755";
         argument = "${cfg.imagePackage}";
