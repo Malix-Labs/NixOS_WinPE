@@ -370,13 +370,18 @@
                   touch $out
                 '';
 
-            uefi-boot-test = pkgs.testers.runNixOSTest {
-              name = "winpe-uefi-boot-test";
+            uefi-boot = pkgs.testers.runNixOSTest {
+              name = "winpe-uefi-boot";
               nodes.machine =
-                { ... }:
+                { pkgs, ... }:
                 {
                   imports = [
                     nixosModules.default
+                  ];
+                  environment.systemPackages = with pkgs; [
+                    wimlib
+                    efibootmgr
+                    coreutils
                   ];
                   hardware.winpe = {
                     enable = true;
@@ -385,15 +390,42 @@
                     payloads.testPayload = {
                       package = pkgs.writeText "GKCN65WW.exe" "payload-content";
                       targetFileName = "GKCN65WW.exe";
+                      silentFlags = [
+                        "-s"
+                        "-noconfirm"
+                        "-n"
+                        "-b"
+                      ];
                     };
                   };
                 };
               testScript = ''
                 start_all()
                 machine.wait_for_unit("multi-user.target")
+
+                # Basic CLI verification
                 machine.succeed("winpe-flash help")
-                machine.succeed("winpe-flash status")
-                machine.succeed("winpe-flash logs")
+
+                # Setup mock WinPE filesystem structure
+                machine.succeed("mkdir -p /mnt/WinPE/sources /mnt/WinPE/firmware /tmp/wim-root/Windows/System32")
+                machine.succeed("echo 'original-startnet' > /tmp/wim-root/Windows/System32/startnet.cmd")
+                machine.succeed("wimlib-imagex capture /tmp/wim-root /mnt/WinPE/sources/boot.wim 'WinPE-Image'")
+
+                # Verify log output handling
+                machine.succeed("echo 'Flasher executed successfully' > /mnt/WinPE/autorun.log")
+                logs_out = machine.succeed("winpe-flash logs")
+                assert "Flasher executed successfully" in logs_out
+
+                # Verify status shows staged payload and log handling
+                status_out = machine.succeed("winpe-flash status")
+                assert "Flasher executed successfully" in status_out
+
+                # Test WIM startnet injection and script contents
+                machine.succeed("winpe-flash reboot <<< 'n' || true")
+                extracted = machine.succeed("wimlib-imagex extract /mnt/WinPE/sources/boot.wim 1 /Windows/System32/startnet.cmd --to-stdout")
+                assert "automount enable" in extracted
+                assert "diskpart /s" in extracted
+                assert "autorun.cmd" in extracted
               '';
             };
           };

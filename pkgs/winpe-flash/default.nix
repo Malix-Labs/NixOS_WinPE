@@ -95,7 +95,7 @@ pkgs.writeShellApplication {
         fi
       done
 
-      if [ "$AC_CONNECTED" -eq 0 ] && [ -d /sys/class/power_supply ]; then
+      if [ "$AC_CONNECTED" -eq 0 ] && [ -n "$(ls -A /sys/class/power_supply 2>/dev/null)" ]; then
         echo "❌ Error: AC power adapter is not connected!"
         echo "Please plug in your laptop charger before flashing firmware."
         exit 1
