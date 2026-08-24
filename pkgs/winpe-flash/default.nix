@@ -38,6 +38,14 @@ pkgs.writeShellApplication {
       echo "  help        Show this help message"
     }
 
+    cmd_logs() {
+      if [ -f /mnt/WinPE/autorun.log ]; then
+        cat /mnt/WinPE/autorun.log
+      else
+        echo "No /mnt/WinPE/autorun.log found."
+      fi
+    }
+
     cmd_status() {
       echo "=== WinPE Subsystem Status ==="
       echo
@@ -61,17 +69,7 @@ pkgs.writeShellApplication {
       if [ -f /mnt/WinPE/autorun.log ]; then
         echo
         echo "[4] Last WinPE Execution Log:"
-        cat /mnt/WinPE/autorun.log
-      fi
-    }
-
-    cmd_logs() {
-      echo "=== Last WinPE Execution Log ==="
-      echo
-      if [ -f /mnt/WinPE/autorun.log ]; then
-        cat /mnt/WinPE/autorun.log
-      else
-        echo "No /mnt/WinPE/autorun.log found."
+        cmd_logs
       fi
     }
 

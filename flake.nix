@@ -256,13 +256,16 @@
                   wineserver -w
 
                   mkdir -p "$WINEPREFIX/drive_c/winpe/firmware"
-                  install -m 644 ${autorunInteractive} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|timeout /t 3|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|cmd.exe|echo [MOCK] dropped to cmd.exe|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+
+                  install_mock_autorun() {
+                    install -m 644 "$1" "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                    sed -i 's|timeout /t [0-9]*|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                    sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                    sed -i 's|cmd.exe|echo [MOCK] dropped to cmd.exe|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  }
 
                   # Test Case 1: Interactive mode - Mock executable succeeds (exit code 0)
+                  install_mock_autorun ${autorunInteractive}
                   printf '@exit 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
 
                   wine cmd.exe /c "C:\winpe\autorun.cmd"
@@ -275,20 +278,13 @@
                   grep -q "Flasher process failed" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   # Test Case 3: Non-Interactive mode - Mock executable fails (exit code 3) -> reboots immediately
-                  install -m 644 ${autorunNonInteractive} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|timeout /t 3|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  install_mock_autorun ${autorunNonInteractive}
 
                   wine cmd.exe /c "C:\winpe\autorun.cmd"
                   grep -q "Non-interactive mode active: rebooting" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   # Test Case 4: Real Windows GUI PE Binary (PE32/PE32+ GUI Subsystem)
-                  install -m 644 ${autorunInteractive} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|timeout /t 3|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
-                  sed -i 's|cmd.exe|echo [MOCK] dropped to cmd.exe|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  install_mock_autorun ${autorunInteractive}
 
                   rm -f "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
                   printf '@echo off\r\necho Mock GUI executed\r\nexit /b 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/gui_payload.cmd"

@@ -241,18 +241,10 @@ in
           checkPayload = p: ''
             PKG_VERSION="${lib.getVersion p.package}"
             TARGET_NAME="${p.targetFileName}"
-            if [ -n "$CURRENT_BIOS" ]; then
-              case "$TARGET_NAME" in
-                *"$CURRENT_BIOS"*)
-                  ;;
-                *)
-                  if [ "$CURRENT_BIOS" != "$PKG_VERSION" ]; then
-                    echo "Firmware payload $TARGET_NAME (version $PKG_VERSION) does not match current BIOS ($CURRENT_BIOS)."
-                    NEEDS_UPDATE=1
-                  fi
-                  ;;
-              esac
-            else
+            if [ -z "$CURRENT_BIOS" ]; then
+              NEEDS_UPDATE=1
+            elif [ "$CURRENT_BIOS" != "$PKG_VERSION" ] && [[ "$TARGET_NAME" != *"$CURRENT_BIOS"* ]]; then
+              echo "Firmware payload $TARGET_NAME (version $PKG_VERSION) does not match current BIOS ($CURRENT_BIOS)."
               NEEDS_UPDATE=1
             fi
           '';
