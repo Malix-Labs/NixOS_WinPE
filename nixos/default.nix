@@ -26,8 +26,23 @@ let
         start /wait "" "%%f"
         if errorlevel 1 (
             echo.
-            echo [ERROR] Firmware flash utility failed with error code %errorlevel%!
-            echo Opening command prompt for manual diagnostics...
+            echo ========================================================
+            echo   [ERROR] Firmware flash utility exited with code %errorlevel%
+            echo ========================================================
+            echo.
+            echo Possible reasons:
+            echo   - AC power adapter is not connected (Error 1702)
+            echo   - Battery level is too low (below 30%%)
+            echo.
+            echo Available actions:
+            echo   1. Plug in AC power and re-run the updater:
+            echo        autorun.cmd
+            echo.
+            echo   2. Reboot back into Linux without updating:
+            echo        wpeutil reboot
+            echo.
+            echo ========================================================
+            echo Opening command prompt for manual maintenance...
             cmd.exe
             goto :done
         )
@@ -40,6 +55,7 @@ let
 
     if %FOUND_PAYLOAD%==0 (
         echo [WARNING] No .exe payload found in \firmware\ directory!
+        echo Type 'wpeutil reboot' to return to Linux.
         echo Opening command prompt for manual maintenance...
         cmd.exe
     )
