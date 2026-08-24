@@ -219,13 +219,22 @@
 
             autorun =
               let
-                eval = evalNixos [
+                evalInteractive = evalNixos [
                   nixosModules.default
                   {
                     hardware.winpe.enable = true;
+                    hardware.winpe.nonInteractive = false;
                   }
                 ];
-                autorun = eval.config.hardware.winpe.autorunScript;
+                evalNonInteractive = evalNixos [
+                  nixosModules.default
+                  {
+                    hardware.winpe.enable = true;
+                    hardware.winpe.nonInteractive = true;
+                  }
+                ];
+                autorunInteractive = evalInteractive.config.hardware.winpe.autorunScript;
+                autorunNonInteractive = evalNonInteractive.config.hardware.winpe.autorunScript;
               in
               pkgs.runCommand "test-autorun"
                 {
@@ -238,7 +247,8 @@
                 }
                 ''
                   # Static Assertion: Ensure start /wait is present to prevent detached GUI execution
-                  grep -Fq 'start /wait "" "%%f"' ${autorun}
+                  grep -Fq 'start /wait "" "%%f"' ${autorunInteractive}
+                  grep -Fq 'start /wait "" "%%f"' ${autorunNonInteractive}
 
                   export WINEDEBUG=-all
                   export WINEPREFIX="$PWD/wine"
@@ -246,34 +256,44 @@
                   wineserver -w
 
                   mkdir -p "$WINEPREFIX/drive_c/winpe/firmware"
-                  cp ${autorun} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  install -m 644 ${autorunInteractive} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
                   sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|timeout /t 3|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
                   sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
                   sed -i 's|cmd.exe|echo [MOCK] dropped to cmd.exe|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
 
-                  # Test Case 1: Mock executable that succeeds (exit code 0)
-                  cat << "EOF" > "$WINEPREFIX/drive_c/winpe/firmware/mock.exe"
-                  @echo off
-                  echo Mock flasher success
-                  exit /b 0
-                  EOF
+                  # Test Case 1: Interactive mode - Mock executable succeeds (exit code 0)
+                  printf '@exit 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
 
                   wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  grep -q "Flash staging completed successfully" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
-                  # Test Case 2: Mock executable that fails (exit code 3)
-                  cat << "EOF" > "$WINEPREFIX/drive_c/winpe/firmware/mock.exe"
-                  @echo off
-                  echo Mock flasher error simulated
-                  exit /b 3
-                  EOF
+                  # Test Case 2: Interactive mode - Mock executable fails (exit code 3) -> drops to cmd.exe
+                  printf '@exit 3\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
 
                   wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  grep -q "Flasher process failed" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
-                  # Test Case 3: Real Windows GUI PE Binary (PE32/PE32+ GUI Subsystem)
-                  # Asserts that start /wait blocks until the GUI application exits
-                  rm -f "$WINEPREFIX/drive_c/winpe/firmware/mock.exe"
-                  cp "$WINEPREFIX/drive_c/windows/system32/notepad.exe" "$WINEPREFIX/drive_c/winpe/firmware/gui_payload.exe"
+                  # Test Case 3: Non-Interactive mode - Mock executable fails (exit code 3) -> reboots immediately
+                  install -m 644 ${autorunNonInteractive} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|timeout /t 3|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+
                   wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  grep -q "Non-interactive mode active: rebooting" "$WINEPREFIX/drive_c/winpe/autorun.log"
+
+                  # Test Case 4: Real Windows GUI PE Binary (PE32/PE32+ GUI Subsystem)
+                  install -m 644 ${autorunInteractive} "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|timeout /t 5|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|timeout /t 3|echo [MOCK] timeout|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|wpeutil reboot|echo [MOCK] wpeutil reboot|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+                  sed -i 's|cmd.exe|echo [MOCK] dropped to cmd.exe|g' "$WINEPREFIX/drive_c/winpe/autorun.cmd"
+
+                  rm -f "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
+                  printf '@echo off\r\necho Mock GUI executed\r\nexit /b 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/gui_payload.cmd"
+                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  grep -q "gui_payload.cmd" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   wineserver -k
                   touch $out

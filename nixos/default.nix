@@ -11,6 +11,14 @@ let
 
   defaultAutorun = pkgs.writeScript "autorun.cmd" ''
     @echo off
+    set LOGFILE=%~dp0autorun.log
+    echo ======================================================== > %LOGFILE%
+    echo   NixOS-Generated WinPE Firmware Flasher Execution Log >> %LOGFILE%
+    echo ======================================================== >> %LOGFILE%
+    echo Timestamp: %DATE% %TIME% >> %LOGFILE%
+    echo Non-Interactive Mode: ${if cfg.nonInteractive then "ENABLED" else "DISABLED"} >> %LOGFILE%
+    echo. >> %LOGFILE%
+
     echo ========================================================
     echo   NixOS-Generated WinPE Firmware Flasher
     echo ========================================================
@@ -19,20 +27,23 @@ let
     set FOUND_PAYLOAD=0
 
     :: Auto-discover and execute any firmware package placed in the firmware directory
-    for %%f in ("%~dp0firmware\*.exe") do (
+    for %%f in (%~dp0firmware\*.exe %~dp0firmware\*.bat %~dp0firmware\*.cmd) do (
         set FOUND_PAYLOAD=1
         echo Found firmware package: %%~nxf
+        echo [WinPE] Found firmware package: %%~nxf >> %LOGFILE%
         echo Staging firmware update...
+        echo [WinPE] Executing flasher: %%f >> %LOGFILE%
         start /wait "" "%%f"
         if errorlevel 1 (
+            echo [WinPE] Flasher process failed. >> %LOGFILE%
             echo.
             echo ========================================================
-            echo   [ERROR] Firmware flash utility exited with code %errorlevel%
+            echo   [ERROR] Firmware flash utility failed!
             echo ========================================================
             echo.
             echo Possible reasons:
-            echo   - AC power adapter is not connected (Error 1702)
-            echo   - Battery level is too low (below 30%%)
+            echo   - AC power adapter is not connected [Error 1702]
+            echo   - Battery level is too low [below 30%%]
             echo.
             echo Available actions:
             echo   1. Plug in AC power and re-run the updater:
@@ -42,22 +53,48 @@ let
             echo        wpeutil reboot
             echo.
             echo ========================================================
-            echo Opening command prompt for manual maintenance...
-            cmd.exe
+            ${
+              if cfg.nonInteractive then
+                ''
+                  echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
+                  echo Non-interactive mode active. Rebooting back to Linux in 3 seconds...
+                  timeout /t 3
+                  wpeutil reboot
+                  goto :done
+                ''
+              else
+                ''
+                  echo Opening command prompt for manual maintenance...
+                  cmd.exe
+                  goto :done
+                ''
+            }
+        ) else (
+            echo.
+            echo Flash staging completed. Rebooting system in 5 seconds...
+            echo [WinPE] Flash staging completed successfully. Rebooting... >> %LOGFILE%
+            timeout /t 5
+            wpeutil reboot
             goto :done
         )
-        echo.
-        echo Flash staging completed. Rebooting system in 5 seconds...
-        timeout /t 5
-        wpeutil reboot
-        goto :done
     )
 
     if %FOUND_PAYLOAD%==0 (
         echo [WARNING] No .exe payload found in \firmware\ directory!
-        echo Type 'wpeutil reboot' to return to Linux.
-        echo Opening command prompt for manual maintenance...
-        cmd.exe
+        echo [WinPE] [WARNING] No .exe payload found in firmware directory! >> %LOGFILE%
+        ${
+          if cfg.nonInteractive then
+            ''
+              echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
+              wpeutil reboot
+            ''
+          else
+            ''
+              echo Type 'wpeutil reboot' to return to Linux.
+              echo Opening command prompt for manual maintenance...
+              cmd.exe
+            ''
+        }
     )
 
     :done
@@ -66,6 +103,8 @@ in
 {
   options.hardware.winpe = {
     enable = lib.mkEnableOption "WinPE bare-metal firmware updater and recovery subsystem";
+
+    nonInteractive = lib.mkEnableOption "fully automated non-interactive firmware execution with log persistence and immediate reboot";
 
     mountPoint = lib.mkOption {
       type = lib.types.str;

@@ -33,6 +33,7 @@ pkgs.writeShellApplication {
       echo
       echo "Commands:"
       echo "  status      Check WinPE partition, firmware payload, and UEFI boot status"
+      echo "  logs        Show the execution transcript log from the last WinPE boot"
       echo "  reboot      Trigger a one-time boot into WinPE on next restart"
       echo "  help        Show this help message"
     }
@@ -48,7 +49,6 @@ pkgs.writeShellApplication {
         echo "  /mnt/WinPE is NOT currently mounted."
       fi
       echo
-
       echo "[2] Staged Firmware Payloads:"
       if [ -d /mnt/WinPE/firmware ]; then
         ls -lh /mnt/WinPE/firmware/
@@ -56,9 +56,23 @@ pkgs.writeShellApplication {
         echo "  No /mnt/WinPE/firmware directory found."
       fi
       echo
-
       echo "[3] UEFI Boot Entries:"
       efibootmgr | grep -E "Boot[0-9]{4}|BootOrder|BootNext" || :
+      if [ -f /mnt/WinPE/autorun.log ]; then
+        echo
+        echo "[4] Last WinPE Execution Log:"
+        cat /mnt/WinPE/autorun.log
+      fi
+    }
+
+    cmd_logs() {
+      echo "=== Last WinPE Execution Log ==="
+      echo
+      if [ -f /mnt/WinPE/autorun.log ]; then
+        cat /mnt/WinPE/autorun.log
+      else
+        echo "No /mnt/WinPE/autorun.log found."
+      fi
     }
 
     cmd_reboot() {
@@ -130,6 +144,9 @@ pkgs.writeShellApplication {
     case "''${1:-help}" in
       status)
         cmd_status
+        ;;
+      logs)
+        cmd_logs
         ;;
       reboot|flash)
         cmd_reboot
