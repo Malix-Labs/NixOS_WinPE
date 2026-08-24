@@ -26,58 +26,28 @@ let
 
     set FOUND_PAYLOAD=0
 
-    :: Auto-discover and execute any firmware package placed in the firmware directory
-    for %%f in (%~dp0firmware\*.exe %~dp0firmware\*.bat %~dp0firmware\*.cmd) do (
-        set FOUND_PAYLOAD=1
-        echo Found firmware package: %%~nxf
-        echo [WinPE] Found firmware package: %%~nxf >> %LOGFILE%
-        echo Staging firmware update...
-        echo [WinPE] Executing flasher: %%f >> %LOGFILE%
-        start /wait "" "%%f"
-        if errorlevel 1 (
-            echo [WinPE] Flasher process failed. >> %LOGFILE%
-            echo.
-            echo ========================================================
-            echo   [ERROR] Firmware flash utility failed!
-            echo ========================================================
-            echo.
-            echo Possible reasons:
-            echo   - AC power adapter is not connected [Error 1702]
-            echo   - Battery level is too low [below 30%%]
-            echo.
-            echo Available actions:
-            echo   1. Plug in AC power and re-run the updater:
-            echo        autorun.cmd
-            echo.
-            echo   2. Reboot back into Linux without updating:
-            echo        wpeutil reboot
-            echo.
-            echo ========================================================
-            ${
-              if cfg.nonInteractive then
-                ''
-                  echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
-                  echo Non-interactive mode active. Rebooting back to Linux in 3 seconds...
-                  timeout /t 3
-                  wpeutil reboot
-                  goto :done
-                ''
-              else
-                ''
-                  echo Opening command prompt for manual maintenance...
-                  cmd.exe
-                  goto :done
-                ''
-            }
-        ) else (
-            echo.
-            echo Flash staging completed. Rebooting system in 5 seconds...
-            echo [WinPE] Flash staging completed successfully. Rebooting... >> %LOGFILE%
-            timeout /t 5
-            wpeutil reboot
-            goto :done
+    ${
+      if activePayloads != { } then
+        lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            _: p:
+            let
+              flags = lib.concatStringsSep " " p.silentFlags;
+            in
+            ''
+              if exist "%~dp0firmware\${p.targetFileName}" (
+                  call :run_payload "%~dp0firmware\${p.targetFileName}" "${p.targetFileName}" "${flags}"
+              )
+            ''
+          ) activePayloads
         )
-    )
+      else
+        ''
+          for %%f in (%~dp0firmware\*.exe %~dp0firmware\*.bat %~dp0firmware\*.cmd) do (
+              call :run_payload "%%f" "%%~nxf" ""
+          )
+        ''
+    }
 
     if %FOUND_PAYLOAD%==0 (
         echo [WARNING] No .exe payload found in \firmware\ directory!
@@ -95,6 +65,58 @@ let
               cmd.exe
             ''
         }
+    )
+    goto :done
+
+    :run_payload
+    set FOUND_PAYLOAD=1
+    echo Found firmware package: %~2
+    echo [WinPE] Found firmware package: %~2 >> %LOGFILE%
+    echo Staging firmware update...
+    echo [WinPE] Executing flasher: %1 %~3 >> %LOGFILE%
+    start /wait "" %1 %~3
+    if errorlevel 1 (
+        echo [WinPE] Flasher process failed. >> %LOGFILE%
+        echo.
+        echo ========================================================
+        echo   [ERROR] Firmware flash utility failed!
+        echo ========================================================
+        echo.
+        echo Possible reasons:
+        echo   - AC power adapter is not connected [Error 1702]
+        echo   - Battery level is too low [below 30%%]
+        echo.
+        echo Available actions:
+        echo   1. Plug in AC power and re-run the updater:
+        echo        autorun.cmd
+        echo.
+        echo   2. Reboot back into Linux without updating:
+        echo        wpeutil reboot
+        echo.
+        echo ========================================================
+        ${
+          if cfg.nonInteractive then
+            ''
+              echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
+              echo Non-interactive mode active. Rebooting back to Linux in 3 seconds...
+              timeout /t 3
+              wpeutil reboot
+              exit /b 1
+            ''
+          else
+            ''
+              echo Opening command prompt for manual maintenance...
+              cmd.exe
+              exit /b 1
+            ''
+        }
+    ) else (
+        echo.
+        echo Flash staging completed. Rebooting system in 5 seconds...
+        echo [WinPE] Flash staging completed successfully. Rebooting... >> %LOGFILE%
+        timeout /t 5
+        wpeutil reboot
+        exit /b 0
     )
 
     :done

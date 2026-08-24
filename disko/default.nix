@@ -3,7 +3,7 @@ let
   partition = {
     priority = 2;
     size = "2G";
-    type = "0700";
+    type = "EF00";
     content = {
       type = "filesystem";
       format = "vfat";

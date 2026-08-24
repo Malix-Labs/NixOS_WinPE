@@ -247,8 +247,8 @@
                 }
                 ''
                   # Static Assertion: Ensure start /wait is present to prevent detached GUI execution
-                  grep -Fq 'start /wait "" "%%f"' ${autorunInteractive}
-                  grep -Fq 'start /wait "" "%%f"' ${autorunNonInteractive}
+                  grep -Fq 'start /wait ""' ${autorunInteractive}
+                  grep -Fq 'start /wait ""' ${autorunNonInteractive}
 
                   export WINEDEBUG=-all
                   export WINEPREFIX="$PWD/wine"
@@ -370,6 +370,33 @@
 
                   touch $out
                 '';
+
+            uefi-boot-test = pkgs.testers.runNixOSTest {
+              name = "winpe-uefi-boot-test";
+              nodes.machine =
+                { ... }:
+                {
+                  imports = [
+                    nixosModules.default
+                  ];
+                  hardware.winpe = {
+                    enable = true;
+                    nonInteractive = true;
+                    autoMount = false;
+                    payloads.testPayload = {
+                      package = pkgs.writeText "GKCN65WW.exe" "payload-content";
+                      targetFileName = "GKCN65WW.exe";
+                    };
+                  };
+                };
+              testScript = ''
+                start_all()
+                machine.wait_for_unit("multi-user.target")
+                machine.succeed("winpe-flash help")
+                machine.succeed("winpe-flash status")
+                machine.succeed("winpe-flash logs")
+              '';
+            };
           };
 
           pre-commit.settings.hooks = {

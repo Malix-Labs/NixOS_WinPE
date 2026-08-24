@@ -3,7 +3,11 @@ let
   startnetScript = pkgs.writeScript "startnet.cmd" ''
     @echo off
     wpeinit
-    for %%d in (c d e f g h i j k l m n o p q r s t u v w x y z) do (
+    echo automount enable > X:\mount.scr
+    echo rescan >> X:\mount.scr
+    diskpart /s X:\mount.scr >nul 2>&1
+    del X:\mount.scr 2>nul
+    for %%d in (c d e f g h i j k l m n o p q r s t u v w x y z C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
         if exist %%d:\autorun.cmd (
             call %%d:\autorun.cmd
             goto :done
