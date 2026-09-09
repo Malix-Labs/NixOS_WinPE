@@ -144,8 +144,10 @@ pkgs.writeShellApplication {
         echo "WinPE startup hook verified."
       fi
 
-      # Locate WinPE boot number
-      WINPE_BOOT_NUM=$($EFIBOOTMGR | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || :)
+      # Locate WinPE boot number. Why grep -m1, not `| head -n1`: with
+      # pipefail, head closing the pipe early after multiple matches kills the
+      # pipeline with SIGPIPE (exit 141).
+      WINPE_BOOT_NUM=$($EFIBOOTMGR | grep -i "WinPE" | grep -o -m1 "Boot[0-9a-fA-F]\{4\}" | sed 's/Boot//' || :)
 
       if [ -z "$WINPE_BOOT_NUM" ]; then
         echo "Error: Could not find 'WinPE' boot entry in efibootmgr!"
@@ -153,7 +155,7 @@ pkgs.writeShellApplication {
         return 1
       fi
 
-      CURRENT_BOOTNEXT=$($EFIBOOTMGR | grep -i "BootNext" | grep -o "[0-9a-fA-F]\{4\}" || :)
+      CURRENT_BOOTNEXT=$($EFIBOOTMGR | grep -i "BootNext" | grep -o -m1 "[0-9a-fA-F]\{4\}" || :)
       if [ "$CURRENT_BOOTNEXT" = "$WINPE_BOOT_NUM" ]; then
         echo "BootNext is already set to WinPE (Boot$WINPE_BOOT_NUM)."
       else

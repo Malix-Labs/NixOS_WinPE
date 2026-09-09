@@ -7,9 +7,13 @@ desktop heap cannot allocate the second console window it spawns
 Fix: `call %~1 %~3` (same console, waits, propagates errorlevel; wine-safe
 when the mock payload uses `exit /b` not bare `exit`).
 
-**Post-v0.5.0 hardening (commit 718dc66):** LZX + CRLF tripwires,
-startnet.log persisted to the ESP, and winpe-qemu failure dumps (ESP
-listing, logs, injected scripts, base64 screendumps) into the build log.
+**Post-v0.5.0 hardening (07f76de + faf564c):** LZX + CRLF tripwires,
+startnet.log persisted to the ESP, winpe-qemu failure dumps (ESP
+listing, logs, injected scripts, base64 screendumps) into the build log,
+and a hardened updateScript: validates catalog discovery, ESD structure
+(image count, WinPE edition, boot files) and hash before touching
+default.nix; idempotent; fixed latent grep|head SIGPIPE and
+`nix hash convert --hash-algo` bugs by running it end-to-end.
 
 ## Target pipeline (what the check validates)
 

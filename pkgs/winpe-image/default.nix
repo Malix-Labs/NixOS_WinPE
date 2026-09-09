@@ -2,6 +2,7 @@
   lib,
   stdenvNoCC,
   fetchurl,
+  coreutils,
   wimlib,
   writeShellApplication,
   curl,
@@ -53,40 +54,88 @@ stdenvNoCC.mkDerivation {
     runHook postInstall
   '';
 
+  # Update flow: fetch the Windows Update product catalog, locate the current
+  # client ESD, prefetch + structurally validate it, then rewrite this file.
+  # Every predictable failure (catalog layout, edition rename, missing boot
+  # files) exits with a named error BEFORE default.nix is touched. Structural
+  # changes that no script can predict (new distribution mechanism, image
+  # reorganization) fail loudly here and need a human-authored fix.
   passthru.updateScript = writeShellApplication {
     name = "update-winpe-image";
     runtimeInputs = [
+      coreutils
       curl
       cabextract
       gnugrep
       gnused
+      wimlib
       nix
     ];
     text = ''
-      PKG_FILE="$(dirname "$0")/default.nix"
+      # Target resolution: pass the flake checkout as $1 (recommended when
+      # running the store-built binary via `nix run`), or rely on $0 sitting
+      # next to default.nix when executed from a source tree.
+      TARGET="''${1:-}"
+      if [ -n "$TARGET" ] && [ -d "$TARGET" ]; then
+        PKG_FILE="$TARGET/pkgs/winpe-image/default.nix"
+      elif [ -n "$TARGET" ] && [ "''${TARGET##*/}" = "default.nix" ]; then
+        PKG_FILE="$TARGET"
+      else
+        PKG_FILE="$(dirname "$0")/default.nix"
+      fi
+      [ -f "$PKG_FILE" ] || { echo "ERROR: target default.nix not found at: $PKG_FILE" >&2; echo "Pass the flake checkout as the first argument, e.g.: nix run .#winpe-image.updateScript -- /path/to/NixOS_WinPE" >&2; exit 1; }
+
       TEMP_DIR="$(mktemp -d)"
       trap 'rm -rf "$TEMP_DIR"' EXIT
 
       echo "Fetching latest Microsoft Windows product catalog..."
-      curl -sL "https://go.microsoft.com/fwlink/?linkid=2156292" -o "$TEMP_DIR/catalog.cab"
-      cabextract -d "$TEMP_DIR" "$TEMP_DIR/catalog.cab" >/dev/null 2>&1
-
+      curl -fsSL "https://go.microsoft.com/fwlink/?linkid=2156292" -o "$TEMP_DIR/catalog.cab"
+      cabextract -q -d "$TEMP_DIR" "$TEMP_DIR/catalog.cab"
       PRODUCTS_XML="$TEMP_DIR/products.xml"
-      ESD_URL=$(grep -B 2 -A 8 "CLIENTCONSUMER_RET_x64FRE_en-us.esd" "$PRODUCTS_XML" | grep -o 'http://[^<]*\.esd' | head -n1)
-      FILENAME=$(basename "$ESD_URL")
-      VERSION=$(echo "$FILENAME" | grep -o '^[0-9]\+\.[0-9]\+' || echo "26100.1")
+      [ -s "$PRODUCTS_XML" ] || { echo "ERROR: catalog did not contain products.xml - Microsoft likely changed the catalog layout" >&2; exit 1; }
 
-      echo "Found ESD: $FILENAME (version $VERSION)"
-      echo "Prefetching hash from Microsoft CDN..."
-      HASH=$(TMPDIR=/var/tmp nix-prefetch-url "$ESD_URL")
-      SRI_HASH=$(nix hash convert --to sri --type sha256 "$HASH")
+      ESD_URL=$(grep -B 2 -A 8 "CLIENTCONSUMER_RET_x64FRE_en-us.esd" "$PRODUCTS_XML" | grep -oE 'https?://[^<]*CLIENTCONSUMER_RET_x64FRE_en-us\.esd' | tail -n1)
+      [ -n "$ESD_URL" ] || { echo "ERROR: no CLIENTCONSUMER_RET_x64FRE_en-us.esd in the catalog - update the discovery logic in this script manually" >&2; exit 1; }
+      case "$ESD_URL" in
+        *dl.delivery.mp.microsoft.com/*) ;;
+        *) echo "ERROR: unexpected ESD host in catalog: $ESD_URL" >&2; exit 1 ;;
+      esac
+      VERSION=$(basename "$ESD_URL" | grep -oE '^[0-9]+\.[0-9]+')
+      [ -n "$VERSION" ] || { echo "ERROR: could not parse version from: $ESD_URL" >&2; exit 1; }
+      # Windows 11 ESDs keep the 10.0 NT kernel prefix in their version.
+      NT_VERSION="10.0.$VERSION"
 
-      echo "Updating $PKG_FILE..."
-      sed -i "s|version = \".*\";|version = \"$VERSION\";|" "$PKG_FILE"
-      sed -i "s|url = \".*\";|url = \"$ESD_URL\";|" "$PKG_FILE"
-      sed -i "s|hash = \"sha256-.*\";|hash = \"$SRI_HASH\";|" "$PKG_FILE"
+      echo "Found ESD: $(basename "$ESD_URL") (version $VERSION)"
+      echo "Prefetching (~5GB, be patient)..."
+      PREFETCH="$TEMP_DIR/prefetch.txt"
+      nix-prefetch-url --print-path "$ESD_URL" > "$PREFETCH"
+      HASH=$(sed -n 1p "$PREFETCH")
+      ESD_STORE_PATH=$(sed -n 2p "$PREFETCH")
+      SRI_HASH=$(nix hash convert --to sri --hash-algo sha256 "$HASH")
 
-      echo "Successfully updated winpe-image to $VERSION ($SRI_HASH)"
+      echo "Validating ESD structure..."
+      IMAGE_COUNT=$(wimlib-imagex info "$ESD_STORE_PATH" | sed -n 's/^Image Count:[[:space:]]*//p')
+      [ -n "$IMAGE_COUNT" ] && [ "$IMAGE_COUNT" -ge 2 ] || { echo "ERROR: expected >= 2 images (1: boot environment, 2: WinPE), got: $IMAGE_COUNT" >&2; exit 1; }
+      wimlib-imagex info "$ESD_STORE_PATH" 2 | grep -qi "WindowsPE" || { echo "ERROR: ESD image 2 is no longer a Windows PE image" >&2; exit 1; }
+      wimlib-imagex dir "$ESD_STORE_PATH" 1 --path=/efi/microsoft/boot/bcd >/dev/null 2>&1 || { echo "ERROR: ESD image 1 lost /efi/microsoft/boot/bcd" >&2; exit 1; }
+      wimlib-imagex dir "$ESD_STORE_PATH" 1 --path=/boot/boot.sdi >/dev/null 2>&1 || { echo "ERROR: ESD image 1 lost /boot/boot.sdi" >&2; exit 1; }
+
+      NEW_PKG="$TEMP_DIR/default.nix"
+      cp "$PKG_FILE" "$NEW_PKG"
+      sed -i "s|version = \".*\";|version = \"$NT_VERSION\";|" "$NEW_PKG"
+      sed -i "s|url = \".*\";|url = \"$ESD_URL\";|" "$NEW_PKG"
+      sed -i "s|hash = \"sha256-.*\";|hash = \"$SRI_HASH\";|" "$NEW_PKG"
+
+      if cmp -s "$PKG_FILE" "$NEW_PKG"; then
+        echo "winpe-image is already at the latest ESD ($VERSION). Nothing to do."
+        exit 0
+      fi
+
+      echo "Pending changes:"
+      diff -u "$PKG_FILE" "$NEW_PKG" || true
+      mv "$NEW_PKG" "$PKG_FILE"
+      echo "Updated winpe-image to $VERSION ($SRI_HASH)"
+      echo "Next: nix flake check -L   (end-to-end validation against the new ESD), then commit."
     '';
   };
 
