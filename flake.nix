@@ -89,6 +89,26 @@
                 }
               ];
             };
+
+          # Shared by the autorun and wim-injection checks.
+          autorunScripts = {
+            interactive =
+              (evalNixos [
+                nixosModules.default
+                {
+                  hardware.winpe.enable = true;
+                  hardware.winpe.nonInteractive = false;
+                }
+              ]).config.hardware.winpe.autorunScript;
+            nonInteractive =
+              (evalNixos [
+                nixosModules.default
+                {
+                  hardware.winpe.enable = true;
+                  hardware.winpe.nonInteractive = true;
+                }
+              ]).config.hardware.winpe.autorunScript;
+          };
         in
         {
           packages = {
@@ -140,6 +160,12 @@
                 grep -Fq "diskpart /s" extracted/startnet.cmd
                 grep -Fq "for %%d in" extracted/startnet.cmd
                 grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
+
+                # Regression tripwire: real Windows cmd aborts LF-only batches
+                # at parenthesized blocks; every generated script must be CRLF.
+                for f in ${winpeFlashPkg.startnetScript} ${autorunScripts.interactive} ${autorunScripts.nonInteractive}; do
+                  grep -q $'\r' "$f" || { echo "ERROR: $f is not CRLF"; exit 1; }
+                done
 
                 touch $out
               '';
@@ -200,22 +226,8 @@
 
             autorun =
               let
-                evalInteractive = evalNixos [
-                  nixosModules.default
-                  {
-                    hardware.winpe.enable = true;
-                    hardware.winpe.nonInteractive = false;
-                  }
-                ];
-                evalNonInteractive = evalNixos [
-                  nixosModules.default
-                  {
-                    hardware.winpe.enable = true;
-                    hardware.winpe.nonInteractive = true;
-                  }
-                ];
-                autorunInteractive = evalInteractive.config.hardware.winpe.autorunScript;
-                autorunNonInteractive = evalNonInteractive.config.hardware.winpe.autorunScript;
+                autorunInteractive = autorunScripts.interactive;
+                autorunNonInteractive = autorunScripts.nonInteractive;
               in
               pkgs.runCommand "test-autorun"
                 {
@@ -472,6 +484,7 @@
                     mtools
                     wimlib
                     coreutils
+                    socat
                   ];
                 }
                 ''
@@ -497,7 +510,8 @@
                   mcopy -o -i disk.img@@1048576 work/boot.wim ::/sources/boot.wim
 
                   # 4. Stage generated autorun.cmd and payload from NixOS module
-                  mcopy -o -i disk.img@@1048576 ${diskoEval.config.hardware.winpe.autorunScript} ::/autorun.cmd
+                  cp ${diskoEval.config.hardware.winpe.autorunScript} autorun.cmd
+                  mcopy -o -i disk.img@@1048576 autorun.cmd ::/autorun.cmd
                   mmd -i disk.img@@1048576 ::/firmware
                   mcopy -o -i disk.img@@1048576 ${diskoEval.config.hardware.winpe.payloads.testPayload.package} ::/firmware/mock-flash.cmd
 
@@ -506,10 +520,29 @@
                   # Why TCG: KVM on this workload hangs nondeterministically at
                   # bootmgr; TCG boots reliably in ~4 minutes.
                   # Windows PE boots in RAM, runs startnet.cmd -> diskpart assign -> autorun.cmd -> wpeutil reboot
+                  dump_diag() {
+                    echo "=== WINPE-QEMU DIAG (attempt $1) ==="
+                    echo "--- ESP root listing ---"
+                    mdir -i disk.img@@1048576 -/ ::/ 2>&1 || true
+                    echo "--- W:\\\\autorun.log ---"
+                    mtype -i disk.img@@1048576 ::/autorun.log 2>&1 || echo "(absent)"
+                    echo "--- W:\\\\startnet.log ---"
+                    mtype -i disk.img@@1048576 ::/startnet.log 2>&1 || echo "(absent - boot died before drive letter assignment)"
+                    echo "--- injected startnet.cmd (from boot.wim) ---"
+                    wimlib-imagex extract work/boot.wim 1 /Windows/System32/startnet.cmd --dest-dir=. --no-acls --nullglob >/dev/null 2>&1 || true
+                    sed 's/^/  | /' startnet.cmd 2>/dev/null || true
+                    echo "--- injected autorun.cmd (from NixOS module) ---"
+                    sed 's/^/  | /' autorun.cmd 2>/dev/null || true
+                  }
+
                   for attempt in 1 2 3; do
                     echo "=== QEMU boot attempt $attempt ==="
                     cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
                     chmod +w VARS.fd
+                    # Screendumps every 20s: the guest console is the only window
+                    # into pre-startnet failures (bootmgr/winload have no logs).
+                    ( for t in $(seq 1 45); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
+                    WATCHDOG=$!
                     timeout 900 qemu-system-x86_64 \
                       -machine q35 \
                       -m 3072 \
@@ -521,6 +554,7 @@
                       -no-reboot \
                       -display none \
                       -net none || true
+                    kill $WATCHDOG 2>/dev/null || true
                     # Success = complete autorun.log flushed by the guest before
                     # wpeutil reboot (killing QEMU mid-run leaves FAT unflushed,
                     # so the log may exist but be incomplete on earlier kills).
@@ -528,7 +562,17 @@
                       echo "complete autorun.log found on attempt $attempt"
                       break
                     fi
-                    [ "$attempt" = 3 ] && { echo "ERROR: complete autorun.log was not created by WinPE after 3 attempts!"; exit 1; }
+                    dump_diag "$attempt"
+                    if [ "$attempt" = 3 ]; then
+                      # Pixel-level post-mortem: embed the last screendumps as
+                      # base64 PPM (decode: base64 -d < block | ppmtojpeg > out.jpg).
+                      for f in $(ls dbg-a$attempt-t*.ppm 2>/dev/null | sort -V | tail -3); do
+                        echo "=== SCREENDUMP $f (base64 ppm) ==="
+                        base64 -w 76 "$f"
+                      done
+                      echo "ERROR: complete autorun.log was not created by WinPE after 3 attempts!"
+                      exit 1
+                    fi
                   done
 
                   # 6. Assert that autorun.log contains the success message

@@ -101,6 +101,10 @@ stdenvNoCC.mkDerivation {
     [ -s "$out/EFI/Microsoft/boot/resources/bootres.dll" ]
     [ -s "$out/EFI/Microsoft/boot/fonts/wgl4_boot.ttf" ]
 
+    # Regression tripwire: bootmgr's ramdisk loader fails LZMS WIMs with
+    # 0xc00000bb; bootable boot.wim must stay LZX.
+    wimlib-imagex info "$out/sources/boot.wim" | grep -q "Compression:.*LZX"
+
     runHook postInstallCheck
   '';
 

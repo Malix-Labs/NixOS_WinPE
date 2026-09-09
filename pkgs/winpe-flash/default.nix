@@ -58,6 +58,8 @@ let
     :found
     echo [5] found autorun.cmd on W:
     echo [5] found autorun.cmd on W: >> %LOG%
+    rem Persist breadcrumbs to the ESP: X: is a RAM disk and dies on reboot.
+    copy /y %LOG% W:\startnet.log >nul
     call W:\autorun.cmd W:
     :done
   '');
