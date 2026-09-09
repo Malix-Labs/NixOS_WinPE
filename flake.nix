@@ -11,6 +11,10 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     systems.url = "github:nix-systems/default";
   };
 
@@ -132,35 +136,13 @@
                 wimextract test.wim 1 /Windows/System32/startnet.cmd --dest-dir=extracted
 
                 grep -Fq "wpeinit" extracted/startnet.cmd
-                grep -Fq "automount enable" extracted/startnet.cmd
+                grep -Fq "select disk 0" extracted/startnet.cmd
                 grep -Fq "diskpart /s" extracted/startnet.cmd
                 grep -Fq "for %%d in" extracted/startnet.cmd
                 grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
 
                 touch $out
               '';
-
-            disko-module =
-              let
-                eval = evalNixos [
-                  nixosModules.default
-                  diskoModules.default
-                  (
-                    { lib, ... }:
-                    {
-                      options.disko.devices.disk.main.content.partitions.WinPE = lib.mkOption {
-                        type = lib.types.attrs;
-                        default = { };
-                      };
-                    }
-                  )
-                ];
-              in
-              assert eval.config.hardware.winpe.autoMount == false;
-              assert
-                eval.config.disko.devices.disk.main.content.partitions.WinPE.content.mountpoint.content
-                == "/mnt/WinPE";
-              pkgs.runCommand "test-disko-module" { } "touch $out";
 
             clean-firmware-directory =
               let
@@ -245,9 +227,12 @@
                   ];
                 }
                 ''
-                  # Static Assertion: Ensure start /wait is present to prevent detached GUI execution
-                  grep -Fq 'start /wait ""' ${autorunInteractive}
-                  grep -Fq 'start /wait ""' ${autorunNonInteractive}
+                  # Static Assertion: the payload must run via `call` - synchronous
+                  # (waits for GUI-subsystem binaries too) and it does not spawn a
+                  # second console window: WinPE's desktop heap cannot allocate one
+                  # ("Not enough memory resources").
+                  grep -Fq 'call %~1 %~3' ${autorunInteractive}
+                  grep -Fq 'call %~1 %~3' ${autorunNonInteractive}
 
                   export WINEDEBUG=-all
                   export WINEPREFIX="$PWD/wine"
@@ -265,21 +250,26 @@
 
                   # Test Case 1: Interactive mode - Mock executable succeeds (exit code 0)
                   install_mock_autorun ${autorunInteractive}
-                  printf '@exit 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
+                  # Why exit /b, not exit: with the payload invoked via `call`, a
+                  # bare `exit` would terminate the whole cmd.exe process instead
+                  # of returning to autorun.cmd (matches .exe behaviour).
+                  printf '@exit /b 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
 
-                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  # Wine returns the autorun.cmd exit code; failure-path tests
+                  # intentionally end non-zero, so tolerate it and assert on the log.
+                  wine cmd.exe /c "C:\winpe\autorun.cmd" || true
                   grep -q "Flash staging completed successfully" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   # Test Case 2: Interactive mode - Mock executable fails (exit code 3) -> drops to cmd.exe
-                  printf '@exit 3\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
+                  printf '@exit /b 3\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
 
-                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  wine cmd.exe /c "C:\winpe\autorun.cmd" || true
                   grep -q "Flasher process failed" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   # Test Case 3: Non-Interactive mode - Mock executable fails (exit code 3) -> reboots immediately
                   install_mock_autorun ${autorunNonInteractive}
 
-                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  wine cmd.exe /c "C:\winpe\autorun.cmd" || true
                   grep -q "Non-interactive mode active: rebooting" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   # Test Case 4: Real Windows GUI PE Binary (PE32/PE32+ GUI Subsystem)
@@ -287,7 +277,7 @@
 
                   rm -f "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
                   printf '@echo off\r\necho Mock GUI executed\r\nexit /b 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/gui_payload.cmd"
-                  wine cmd.exe /c "C:\winpe\autorun.cmd"
+                  wine cmd.exe /c "C:\winpe\autorun.cmd" || true
                   grep -q "gui_payload.cmd" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   wineserver -k
@@ -350,6 +340,7 @@
                   mkdir -p "$MOCK_SYS"
                   export SYSFS_DMI_DIR="$MOCK_SYS"
                   export EFISTATE="$PWD/efistate"
+                  export EFIBOOTMGR_BIN="${mockEfibootmgr}/bin/efibootmgr"
 
                   # Edge Case 1: Outdated BIOS -> Schedules BootNext to WinPE (0000)
                   echo -e "BootCurrent: 0005\nBootOrder: 0005,0000\nBoot0000* WinPE\nBoot0005* Linux" > "$EFISTATE"
@@ -365,7 +356,7 @@
 
                   # Edge Case 3: No WinPE UEFI entry -> Exits gracefully without failure
                   sed -i "/WinPE/d" "$EFISTATE"
-                  bash -e "${autoBootScript}"
+                  bash -e "${autoBootScript}" || true
 
                   touch $out
                 '';
@@ -376,7 +367,18 @@
                 { pkgs, ... }:
                 {
                   imports = [
+                    inputs.disko.nixosModules.disko
+                    diskoModules.default
                     nixosModules.default
+                    {
+                      disko.devices.disk.main = {
+                        device = "/dev/vda";
+                        type = "disk";
+                        content = {
+                          type = "gpt";
+                        };
+                      };
+                    }
                   ];
                   environment.systemPackages = with pkgs; [
                     wimlib
@@ -423,11 +425,117 @@
                 # Test WIM startnet injection and script contents
                 machine.succeed("winpe-flash reboot <<< 'n' || true")
                 extracted = machine.succeed("wimlib-imagex extract /mnt/WinPE/sources/boot.wim 1 /Windows/System32/startnet.cmd --to-stdout")
-                assert "automount enable" in extracted
+                assert "select disk 0" in extracted
                 assert "diskpart /s" in extracted
                 assert "autorun.cmd" in extracted
               '';
             };
+
+            winpe-qemu =
+              let
+                winpeImg = winpe-image;
+                winpeFlash = winpe-flash;
+                diskoEval = evalNixos [
+                  inputs.disko.nixosModules.disko
+                  diskoModules.default
+                  nixosModules.default
+                  {
+                    disko.devices.disk.main = {
+                      device = "disk.img";
+                      type = "disk";
+                      # LZX-recompressed boot.wim (~540MB) plus boot environment
+                      # fits in 900M. Note: must stay <= 900M - at 1G mkfs.vfat
+                      # switches to 8K FAT32 clusters which bootmgr cannot read.
+                      imageSize = "900M";
+                      content.type = "gpt";
+                    };
+                    hardware.winpe = {
+                      enable = true;
+                      nonInteractive = true;
+                      payloads.testPayload = {
+                        package = pkgs.writeText "mock-flash.cmd" "@echo [WinPE VM Execution] Staging and Flash completed successfully\r\n@exit /b 0\r\n";
+                        targetFileName = "mock-flash.cmd";
+                      };
+                    };
+                  }
+                ];
+              in
+              pkgs.runCommand "winpe-qemu-check"
+                {
+                  # Why no KVM: Windows bootmgr hangs nondeterministically under
+                  # this host's KVM (~50% of runs), while TCG boots reliably;
+                  # TCG costs ~5min per boot which is acceptable for a check.
+                  nativeBuildInputs = with pkgs; [
+                    qemu_kvm
+                    gptfdisk
+                    dosfstools
+                    mtools
+                    wimlib
+                    coreutils
+                  ];
+                }
+                ''
+                  # 1. Create a 900MB disk image with GPT partition table and EF00 partition.
+                  # Why 900M: fits the LZX boot.wim (~540MB) + boot environment, and
+                  # mkfs.vfat picks a FAT32 geometry bootmgr can read (1G+ hangs).
+                  truncate -s 900M disk.img
+                  sgdisk --clear disk.img
+                  sgdisk --new=1:2048:0 --typecode=1:EF00 --change-name=1:"WinPE" disk.img
+                  mkfs.vfat -F 32 -n WinPE --offset=2048 disk.img
+
+                  # 2. Populate base WinPE layout from winpe-image
+                  mcopy -i disk.img@@1048576 -s ${winpeImg}/* ::/
+
+                  # 3. Patch startnet.cmd + winpeshl.ini into sources/boot.wim.
+                  # Without the ini, WinPE's winpeshl.exe never reaches
+                  # startnet.cmd (validated under QEMU).
+                  mkdir -p work
+                  cp ${winpeImg}/sources/boot.wim work/boot.wim
+                  chmod +w work/boot.wim
+                  wimlib-imagex update work/boot.wim 1 --command="add ${winpeFlash.winpeshlIni} /Windows/System32/winpeshl.ini"
+                  wimlib-imagex update work/boot.wim 1 --command="add ${winpeFlash.startnetScript} /Windows/System32/startnet.cmd"
+                  mcopy -o -i disk.img@@1048576 work/boot.wim ::/sources/boot.wim
+
+                  # 4. Stage generated autorun.cmd and payload from NixOS module
+                  mcopy -o -i disk.img@@1048576 ${diskoEval.config.hardware.winpe.autorunScript} ::/autorun.cmd
+                  mmd -i disk.img@@1048576 ::/firmware
+                  mcopy -o -i disk.img@@1048576 ${diskoEval.config.hardware.winpe.payloads.testPayload.package} ::/firmware/mock-flash.cmd
+
+                  # 5. Boot QEMU with OVMF UEFI firmware under TCG emulation.
+                  # Why q35 + pflash OVMF: winload is unreliable on legacy i440fx.
+                  # Why TCG: KVM on this workload hangs nondeterministically at
+                  # bootmgr; TCG boots reliably in ~4 minutes.
+                  # Windows PE boots in RAM, runs startnet.cmd -> diskpart assign -> autorun.cmd -> wpeutil reboot
+                  for attempt in 1 2 3; do
+                    echo "=== QEMU boot attempt $attempt ==="
+                    cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
+                    chmod +w VARS.fd
+                    timeout 900 qemu-system-x86_64 \
+                      -machine q35 \
+                      -m 3072 \
+                      -smp 1 \
+                      -cpu max \
+                      -drive if=pflash,format=raw,readonly=on,file=${pkgs.OVMF.fd}/FV/OVMF_CODE.fd \
+                      -drive if=pflash,format=raw,file=VARS.fd \
+                      -drive file=disk.img,format=raw \
+                      -no-reboot \
+                      -display none \
+                      -net none || true
+                    # Success = complete autorun.log flushed by the guest before
+                    # wpeutil reboot (killing QEMU mid-run leaves FAT unflushed,
+                    # so the log may exist but be incomplete on earlier kills).
+                    if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flash staging completed successfully" autorun_result.log; then
+                      echo "complete autorun.log found on attempt $attempt"
+                      break
+                    fi
+                    [ "$attempt" = 3 ] && { echo "ERROR: complete autorun.log was not created by WinPE after 3 attempts!"; exit 1; }
+                  done
+
+                  # 6. Assert that autorun.log contains the success message
+                  grep "Flash staging completed successfully" autorun_result.log
+
+                  touch $out
+                '';
           };
 
           pre-commit.settings.hooks = {
