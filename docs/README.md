@@ -45,11 +45,11 @@ Instead, OEMs distribute critical firmware and EC updates exclusively as Windows
 
 ## ✨ Features
 
-- **100% Declarative & Pure:** Zero binary blobs hosted in Git. Payloads are fetched on-demand using standard Nix `pkgs.fetchurl` with cryptographic SHA-256 integrity verification.
+- **100% Declarative & Pure:** Zero binary blobs hosted in Git. Base WinPE media is extracted directly from Microsoft's official Windows ESD (`pkgs.winpe-image`) and verified cryptographically via SHA-256.
 - **Headless Automation:** Boots into WinPE in RAM, silently stages the firmware in NVRAM, and triggers the hardware flash without requiring a mouse or GUI interaction.
 - **Dynamic Auto-Discovery:** Batch runner automatically finds and executes any staged firmware executables without hardcoded paths.
-- **Disko Integration:** Provides modular Disko partition configurations for automated disk partitioning.
-- **CLI Utility (`winpe-flash`):** Built-in CLI tool to inspect status, check staged firmware, and trigger one-time reboots.
+- **Disko Integration:** Provides modular Disko partition configurations (`EF00` EFI partition) for automated disk partitioning.
+- **CLI Utility (`winpe-flash`):** Built-in CLI tool to inspect status, check execution logs, arm `boot.wim` with UEFI `BootNext`, and trigger safe reboots with AC power guards.
 
 ---
 
@@ -119,13 +119,15 @@ In your `configuration.nix`:
 
 ### 3. Disk Partitioning (Disko or Manual)
 
-#### Using Disko:
+#### Using Disko Module:
+You can import `nixos-winpe.diskoModules.default` directly or declare the partition manually:
+
 ```nix
 # In your disko configuration
 disko.devices.disk.main.content.partitions.WinPE = {
   priority = 2;
   size = "2G";
-  type = "0700"; # Microsoft Basic Data / FAT32
+  type = "EF00"; # EFI System Partition (mounted at /mnt/WinPE)
   content = {
     type = "filesystem";
     format = "vfat";
@@ -142,11 +144,15 @@ disko.devices.disk.main.content.partitions.WinPE = {
 1. Ensure your laptop is **connected to AC power**.
 2. Run:
    ```bash
-   nix run github:Malix-Labs/NixOS_WinPE#winpe-flash -- reboot
-   # or manually:
-   nix shell nixpkgs#efibootmgr -c sudo efibootmgr -n <WinPE_Boot_ID> && sudo reboot
+   sudo winpe-flash reboot
    ```
-3. The system will boot into WinPE, stage the update, and flash the motherboard.
+   Or inspect and arm without an immediate reboot:
+   ```bash
+   sudo winpe-flash status   # Check partition, firmware payload, and UEFI boot entry
+   sudo winpe-flash arm      # Inject startup hook into boot.wim and set UEFI BootNext
+   sudo winpe-flash logs     # View execution transcript from the last WinPE boot
+   ```
+3. The system will boot into WinPE, stage the update, flash the motherboard, and reboot back into NixOS.
 
 ---
 
