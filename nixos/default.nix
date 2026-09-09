@@ -9,7 +9,14 @@ let
 
   activePayloads = lib.filterAttrs (_: p: p.enable) cfg.payloads;
 
-  defaultAutorun = pkgs.writeScript "autorun.cmd" ''
+  # Why CRLF: Windows cmd silently aborts batch files with LF-only line
+  # endings at parenthesized blocks (e.g. `if errorlevel 1 (`) - validated
+  # under QEMU where the LF script died right after start /wait, while the
+  # same logic as CRLF ran to completion. Wine's cmd is lenient, so the wine
+  # check cannot catch this.
+  toCRLF = text: lib.strings.replaceStrings [ "\n" ] [ "\r\n" ] text;
+
+  defaultAutorun = pkgs.writeText "autorun.cmd" (toCRLF ''
     @echo off
     set LOGFILE=%~dp0autorun.log
     echo ======================================================== > %LOGFILE%
@@ -35,37 +42,35 @@ let
               flags = lib.concatStringsSep " " p.silentFlags;
             in
             ''
-              if exist "%~dp0firmware\${p.targetFileName}" (
-                  call :run_payload "%~dp0firmware\${p.targetFileName}" "${p.targetFileName}" "${flags}"
-              )
+              if exist "%~dp0firmware\${p.targetFileName}" call :run_payload "%~dp0firmware\${p.targetFileName}" "${p.targetFileName}" "${flags}"
             ''
           ) activePayloads
         )
       else
         ''
-          for %%f in (%~dp0firmware\*.exe %~dp0firmware\*.bat %~dp0firmware\*.cmd) do (
-              call :run_payload "%%f" "%%~nxf" ""
-          )
+          for %%f in (%~dp0firmware\*.exe %~dp0firmware\*.bat %~dp0firmware\*.cmd) do call :run_payload "%%f" "%%~nxf" ""
         ''
     }
 
-    if %FOUND_PAYLOAD%==0 (
-        echo [WARNING] No .exe payload found in \firmware\ directory!
-        echo [WinPE] [WARNING] No .exe payload found in firmware directory! >> %LOGFILE%
-        ${
-          if cfg.nonInteractive then
-            ''
-              echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
-              wpeutil reboot
-            ''
-          else
-            ''
-              echo Type 'wpeutil reboot' to return to Linux.
-              echo Opening command prompt for manual maintenance...
-              cmd.exe
-            ''
-        }
-    )
+    if %FOUND_PAYLOAD%==0 goto :nopayload
+    goto :done
+
+    :nopayload
+    echo [WARNING] No .exe payload found in \firmware\ directory!
+    echo [WinPE] [WARNING] No .exe payload found in firmware directory! >> %LOGFILE%
+    ${
+      if cfg.nonInteractive then
+        ''
+          echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
+          wpeutil reboot
+        ''
+      else
+        ''
+          echo Type 'wpeutil reboot' to return to Linux.
+          echo Opening command prompt for manual maintenance...
+          cmd.exe
+        ''
+    }
     goto :done
 
     :run_payload
@@ -73,54 +78,36 @@ let
     echo Found firmware package: %~2
     echo [WinPE] Found firmware package: %~2 >> %LOGFILE%
     echo Staging firmware update...
-    echo [WinPE] Executing flasher: %1 %~3 >> %LOGFILE%
-    start /wait "" %1 %~3
+    echo [WinPE] Executing flasher: %~1 %~3 >> %LOGFILE%
+    rem Runs the payload synchronously (waits even for GUI-subsystem PE binaries).
+    rem Why call and not start /wait: start spawns a second console window and
+    rem WinPE's desktop heap cannot allocate it - "Not enough memory resources
+    rem are available to process this command." (validated under QEMU). call
+    rem executes in this console, waits, and propagates errorlevel.
+    rem Why unquoted %~1: wine cmd rejects quoted call targets ("Invalid name");
+    rem payload paths live on the ESP and contain no spaces.
+    call %~1 %~3
+    rem Why a small if-block, no goto and no long error text here: after a
+    rem start /wait, WinPE cmd fails re-reading large chunks of the batch file
+    rem from the ESP with "Not enough memory resources" (validated under QEMU).
+    rem Keep every post-start/wait read small.
     if errorlevel 1 (
         echo [WinPE] Flasher process failed. >> %LOGFILE%
-        echo.
-        echo ========================================================
-        echo   [ERROR] Firmware flash utility failed!
-        echo ========================================================
-        echo.
-        echo Possible reasons:
-        echo   - AC power adapter is not connected [Error 1702]
-        echo   - Battery level is too low [below 30%%]
-        echo.
-        echo Available actions:
-        echo   1. Plug in AC power and re-run the updater:
-        echo        autorun.cmd
-        echo.
-        echo   2. Reboot back into Linux without updating:
-        echo        wpeutil reboot
-        echo.
-        echo ========================================================
-        ${
-          if cfg.nonInteractive then
-            ''
-              echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
-              echo Non-interactive mode active. Rebooting back to Linux in 3 seconds...
-              timeout /t 3
-              wpeutil reboot
-              exit /b 1
-            ''
-          else
-            ''
-              echo Opening command prompt for manual maintenance...
-              cmd.exe
-              exit /b 1
-            ''
-        }
-    ) else (
-        echo.
-        echo Flash staging completed. Rebooting system in 5 seconds...
-        echo [WinPE] Flash staging completed successfully. Rebooting... >> %LOGFILE%
-        timeout /t 5
+        echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
+        echo [ERROR] Firmware flash utility failed! Check %LOGFILE% on the WinPE partition.
+        ping -n 4 127.0.0.1 >nul
         wpeutil reboot
-        exit /b 0
+        exit /b 1
     )
+    echo [WinPE] Flash staging completed successfully. Rebooting... >> %LOGFILE%
+    echo.
+    echo Flash staging completed. Rebooting system in 5 seconds...
+    ping -n 6 127.0.0.1 >nul
+    wpeutil reboot
+    exit /b 0
 
     :done
-  '';
+  '');
 in
 {
   options.hardware.winpe = {
@@ -264,9 +251,8 @@ in
         "local-fs.target"
       ];
       path = with pkgs; [
-        efibootmgr
         coreutils
-        gnugrep
+        cfg.package
       ];
       serviceConfig = {
         Type = "oneshot";
@@ -286,12 +272,6 @@ in
           '';
         in
         ''
-          WINPE_BOOT_NUM=$(efibootmgr | grep -i "WinPE" | grep -o "Boot[0-9a-fA-F]\{4\}" | head -n1 | sed 's/Boot//' || :)
-          if [ -z "$WINPE_BOOT_NUM" ]; then
-            echo "WinPE UEFI boot entry not found; skipping BootNext scheduling."
-            exit 0
-          fi
-
           CURRENT_BIOS=""
           SYSFS_DMI="''${SYSFS_DMI_DIR:-/sys/class/dmi/id}"
           if [ -r "$SYSFS_DMI/bios_version" ]; then
@@ -302,13 +282,9 @@ in
           ${lib.concatStringsSep "\n" (lib.mapAttrsToList (_: checkPayload) activePayloads)}
 
           if [ "$NEEDS_UPDATE" -eq 1 ]; then
-            CURRENT_BOOTNEXT=$(efibootmgr | grep -i "BootNext" | grep -o "[0-9a-fA-F]\{4\}" || :)
-            if [ "$CURRENT_BOOTNEXT" = "$WINPE_BOOT_NUM" ]; then
-              echo "BootNext is already set to WinPE (Boot$WINPE_BOOT_NUM)."
-            else
-              echo "Scheduling one-time boot into WinPE (Boot$WINPE_BOOT_NUM) on next restart..."
-              efibootmgr -n "$WINPE_BOOT_NUM"
-            fi
+            echo "Scheduling WinPE boot for staged firmware..."
+            # Why winpe-flash arm: guarantees boot.wim is patched with startnet.cmd hook before setting UEFI BootNext.
+            ${lib.getExe cfg.package} arm
           else
             echo "All staged firmware payloads match the current BIOS ($CURRENT_BIOS). No update needed."
           fi
