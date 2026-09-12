@@ -1,114 +1,275 @@
-# NixOS_WinPE — `winpe-qemu` debugging research log
+# NixOS_WinPE — `winpe-qemu` debugging research log (COMPACT-SAFE MASTER STATE)
 
-**RESOLVED (v0.5.0): `nix flake check -L` fully green.**
-Final root cause of the last blocker: `start /wait` in autorun.cmd — WinPE's
-desktop heap cannot allocate the second console window it spawns
-("Not enough memory resources are available to process this command.").
-Fix: `call %~1 %~3` (same console, waits, propagates errorlevel; wine-safe
-when the mock payload uses `exit /b` not bare `exit`).
+> **READ THIS FIRST.** This file is the single source of truth for the debugging
+> session. It is written to survive context compaction. Every store path,
+> command recipe, finding, and next step is here. Update it as you go.
 
-**Post-v0.5.0 hardening (07f76de + faf564c):** LZX + CRLF tripwires,
-startnet.log persisted to the ESP, winpe-qemu failure dumps (ESP
-listing, logs, injected scripts, base64 screendumps) into the build log,
-and a hardened updateScript: validates catalog discovery, ESD structure
-(image count, WinPE edition, boot files) and hash before touching
-default.nix; idempotent; fixed latent grep|head SIGPIPE and
-`nix hash convert --hash-algo` bugs by running it end-to-end.
+## 0. MISSION & CURRENT STATE (2026-09-10 evening)
 
-## Target pipeline (what the check validates)
+- Repo: `/home/malix/Repositories/Malix-Labs/NixOS_WinPE` (branch main)
+- **v0.6.0 tagged & pushed** at commit `731d42c` (full `nix flake check -L` green
+  on that tree: all 18 checks ✅).
+- dotfiles (`/home/malix/Repositories/Malix-Labs/dotfiles`, branch main, commit
+  `8153738`) locked to nixos-winpe `731d42c` (v0.6.0), pushed.
+- User said: **no new tag without their explicit green light.** New commits go on
+  main, untagged; tag comes later.
+- **REAL HARDWARE TEST FAILED** (user's Lenovo Legion 5 15ACH6H, screenshot seen):
+  v0.6.0's startnet.cmd (hardcoded `select disk 0` / `select partition 1` /
+  `assign letter=W`) never mounted the ESP on the real laptop → fallback letter
+  scan found nothing → "[!] ERROR: WinPE partition with autorun.cmd not found" →
+  stuck at `cmd.exe` prompt (guest escapes with `wpeutil reboot`).
+- **Fix written (UNCOMMITTED in working tree):** startnet.cmd now does
+  `san policy=onlineall` + `list volume` + label-based lookup of the volume
+  named "WinPE" → `select volume %VOLNUM%` + `assign letter=W`. No hardcoded
+  disk/partition numbers (multi-disk + partition-reorder safe).
+  Also: `list volume` table echoed to console AND startnet.log for post-mortem.
+- **QEMU CHECK STATUS WITH THE FIX: FAILED 3/3** (`/tmp/v06fix2.log`, drv
+  `/nix/store/acjmmx1hrccsr1fs3kapk819imv69d4g-winpe-qemu-check.drv`). The
+  label-lookup script does NOT mount W: in QEMU either. **7 screendumps were
+  captured in that build** ("screendump count: 7") and are embedded in
+  `/tmp/v06fix2.log` as base64 PPM blocks — **NOT YET VIEWED. That is the
+  immediate next step** (they show the guest console incl. the diskpart
+  `list volume` table, because startnet echoes it).
 
-1. `winpe-image`: extracts WinPE from Microsoft ESD `26100.4349...CLIENTCONSUMER_RET_x64FRE_en-us.esd`
-2. ESP layout: GPT, 1 partition `EF00`, FAT32 label `WinPE`, 900M
-3. ESP contents: `/boot` (bcd, boot.sdi, fonts, resources), `/EFI/Boot/bootx64.efi`, `/EFI/Microsoft/boot/*` (bcd, fonts, resources, cipolicies), `/sources/boot.wim` (LZX), `/autorun.cmd`, `/firmware/mock-flash.cmd`
-4. WIM patches: `winpeshl.ini` (launches `cmd /s /k startnet.cmd`) + `startnet.cmd` (breadcrumb logging, diskpart assigns W:, calls `W:\autorun.cmd`)
-5. Guest: boots WinPE → startnet → autorun.cmd (module-generated) → `start /wait "" W:\firmware\mock-flash.cmd /SILENT /VERYSILENT /SUPPRESSMSGBOXES` → mock echoes success → `if errorlevel 1 (...) else (log success + ping + wpeutil reboot)` → QEMU `-no-reboot` exits → host asserts `autorun.log` contains "Flash staging completed successfully"
+## 0.5 ROOT CAUSE FOUND (2026-09-12): ESD WinPE has NO findstr.exe — FIX APPLIED
 
-## SOLVED root causes (each masked the next)
+**The label-lookup failure was never about diskpart output parsing or the SAN
+policy — the ESD-extracted WinPE image ships without findstr.exe.** The old
+script's `for /f ('findstr /i "WinPE" X:\dp.out')` died with `'findstr' is not
+recognized as an internal or external command` → VOLNUM never set → assign
+skipped → no drive letter → scan found nothing → interactive cmd.exe → 900s
+check timeout.
 
-| #   | Symptom                                                                                              | Root cause                                                                                                                                        | Fix                                                          |
-| --- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 1   | Flat blue screen, hang, zero text                                                                    | Only 3 files extracted from ESD Image 1; bootmgr needs `fonts/*.ttf` + `resources/bootres.dll` + MUI to render anything                           | `winpe-image` extracts full `/boot` + `/efi/microsoft` trees |
-| 2   | Recovery screen `winload.efi 0xc00000bb`                                                             | ESD Image 2 is LZMS-compressed; bootmgr ramdisk loader can't read LZMS WIMs                                                                       | export with `--compress=LZX` (538MB)                         |
-| 3   | Pre-graphics bootmgr hang                                                                            | 1G disk → mkfs.vfat picks FAT32 geometry bootmgr chokes on                                                                                        | 900M disks work; keep `imageSize = "900M"`                   |
-| 4   | Batch abort after payload echo, "Not enough memory resources are available to process this command." | `timeout /t` spawn unreliable in WinPE sessions                                                                                                   | `ping -n N 127.0.0.1 >nul` sleep idiom                       |
-| 5   | wine check regression                                                                                | wine cmd rejects QUOTED `call` targets ("Invalid name") and quoted `start` targets                                                                | use `%~1` (unquoted) everywhere; ESP paths have no spaces    |
-| 6   | wim-injection check regression                                                                       | startnet had literal `\\` double backslashes                                                                                                      | single backslashes throughout                                |
-| 7   | static assertion in autorun check                                                                    | asserts `start /wait ""` present (anti-detach); don't replace with `call`                                                                         | keep `start /wait "" %~1 %~3`                                |
-| 8   | Guest script dies at `if errorlevel 1 (` block                                                       | **LF-only batch files**: real Windows cmd aborts at parenthesized blocks; Wine is lenient (why wine check passed while VM failed)                 | `toCRLF` conversion for `autorun.cmd` + `startnet.cmd`       |
-| 9   | Broken nixpkgs qemu in check                                                                         | locked flake nixpkgs (2026-08-22) qemu builds fail the payload spawn; floating nixpkgs qemu_kvm `f0l6wcpd9mfx0chsn27d45fyz8fwd3px` (11.1.0) works | `nix flake update nixpkgs` (now dc5d91f84032, qemu f0l6wc)   |
+**Evidence (ground truth, 8 manual-boot screendumps):** `.debug/manual/s1.jpg`
+… `s8.jpg` (+ original .ppm), captured via QEMU TCP monitor (`-monitor
+tcp:127.0.0.1:4499,server,nowait`; `printf "screendump sN.ppm\n" | timeout 3 nc
+127.0.0.1 4499`; convert `nix shell nixpkgs#netpbm -c ppmtojpeg`). s2.jpg is the
+money shot (findstr error + `[3] WinPE volume = ` empty). s5–s8 identical:
+static `cmd.exe` prompt = the hang. `dp.out`'s table was never captured (flashed
+by between dumps) — irrelevant: the fix uses no text tools at all.
 
-## CURRENT BLOCKER (the last 10%) — REVISED UNDERSTANDING
+**Corollary: assume find.exe is absent too. Guest scripts must use NO external
+text tools — pure batch only.**
 
-**KEY REALIZATION (user-prompted): stop trial-and-error on script content — DIFF THE TWO DISK IMAGES.**
+**Fix (uncommitted, in this tree):**
 
-I have both images: `.debug/disk-swap.img` (SUCCESS) and `.debug/disk-repro.img` (FAIL, built with
-identical store paths & full env). Extract every file from both ESPs, byte-compare (cmp/md5):
-autorun.cmd, sources/boot.wim (538MB — if WIMs differ, the two wimlib builds produce different
-bytes → different X: ramdisk → spawn failure), ini, startnet, boot files.
+- `pkgs/winpe-flash/default.nix` startnetScript: dp.out parsed with
+  `setlocal enabledelayedexpansion` + `for /f "delims="` + case-insensitive
+  substring test (`if /i not "!LN:WinPE=!" == "!LN!"`) + `tokens=2` (the
+  `Volume N` number; works with/without a Ltr column); `endlocal & set
+"VOLNUM=%VOLNUM%"` idiom to export past endlocal. Retry loop unchanged.
+  Hardcoded `select disk 0 / partition 1 / assign letter=W` KEPT as last resort
+  before the letter scan — required by the `uefi-boot` check's `assert "select
+disk 0"`, and harmless on hardware (letter assignment touches no data;
+  `W:\autorun.cmd` gates everything). Error path: `ping -n 21` (20s readable)
+  - `wpeutil reboot` — fail fast, no interactive cmd.exe (BootNext one-shot →
+    back to NixOS).
+- `flake.nix` wim-injection check: added `enabledelayedexpansion` grep +
+  tripwire: startnet.cmd must NOT contain "findstr" (case-insensitive!). Note
+  the batch text itself cannot even mention the word — the comment says
+  "lacks some standard text tools" instead.
+- Wine smoke test of the parser attempted + ABANDONED same day:
+  `nix shell nixpkgs#wine` first-run prefix init hangs the terminal (RpcSs
+  marshal errors, never returns). Wine is lenient anyway; winpe-qemu is the
+  only real validator.
 
-Also noted: c14's success used an **LF** autorun (extracted from disk-swap), out5's failure used
-**CRLF** replica on checkcmd-disk → confounded; the image diff resolves all confounds at once.
+**Remaining: `nix build .#checks.x86_64-linux.winpe-qemu -L` → full `nix flake
+check -L` → commit main (NO tag without user approval) → push → dotfiles `nix
+flake update nixos-winpe` → ask user about tag + real-hardware retry.**
 
-Failure signature (screendump-confirmed): payload child echoes, then
-`Not enough memory resources are available to process this command.`, child window stays at prompt,
-parent (startnet /k) frozen at `start /wait` — before writing the success line to W:\autorun.log.
+Real-hardware expectation: `san policy=onlineall` brings the NVMe online,
+`list volume` shows the FAT32 `WinPE` partition (disko EF00), label match →
+`select volume N` → `assign letter=W` → autorun. Breadcrumbs [1]..[5] +
+`startnet.log` on W: tell the story if not.
 
-**Works manually, fails identically-in-sandbox AND in `env -i` shell AND with full env.**
+## 1. HOW TO EXTRACT THE EVIDENCE (exact recipe)
 
-Guest console screenshot at failure: payload echo line, then
-`Not enough memory resources are available to process this command.`, then `X:\Windows\System32>` prompt. Log stops at "[WinPE] Executing flasher: ..." — i.e. death immediately after `start /wait` returns, before `if errorlevel 1` writes anything.
+`/tmp/v06fix2.log` = full `nix build -L` log of the failing check (STILL EXISTS,
+39KB+… verify: it should contain many MB if base64 blocks are in it — earlier
+`wc -c /tmp/q3log.txt` = 39KB was a DIFFERENT log (nix log of an older drv).
+`grep -c SCREENDUMP /tmp/v06fix2.log` tells the truth).
 
-Key contradiction to resolve:
+Extraction recipe (worked before; previous attempts failed due to buggy
+one-liners, not missing data):
 
-- Manual runs (my shell, full env, direct qemu on pre-built disk, **replica autorun script**): SUCCESS ×6 (186s, complete log, reboot)
-- Builder runs (nix daemon, sandbox or `--option sandbox false`): FAIL 0/3
-- `env -i` + builder PATH + **exact builder script** (module autorun, current store paths): FAIL (reproduced manually! → **NOT nix-special**)
-- full env + builder PATH + **exact builder script**: FAIL (out4) → **NOT env vars either!**
-- ⇒ the variable is **the DISK CONTENT built by the check script** (module autorun + single-glob mcopy build) vs my manual disk (replica autorun + per-dir mcopy). The QEMU process env is exonerated by out4.
+```
+grep -n "=== SCREENDUMP" /tmp/v06fix2.log          # list markers
+# pick two marker line numbers L and N (next marker)
+sed -n "$((L+1)),$((N-1))p" /tmp/v06fix2.log > b64.txt
+base64 -d b64.txt > pic.ppm
+nix shell nixpkgs#netpbm -c ppmtojpeg pic.ppm > pic.jpg   # then read_file pic.jpg
+```
 
-### Eliminated causes (do NOT re-test)
+Marker names look like `=== SCREENDUMP dbg-a1-t20.ppm (base64 ppm) ===`.
+Earlier attempts at extraction failed with "invalid input" because the sed
+range accidentally included the trailing `ERROR:` line — filter it or pick
+markers strictly.
 
-- KVM flakiness theory (red herring; mixed with qemu-build + host-memory issues)
-- OVMF version 202605 vs 202608 (both work manually; A/B tested)
-- QEMU package full vs qemu_kvm (037j0x failed once manually but f0l6wc failed in builder → not the binary)
-- -smp 4 vs 1, -m 3072 vs 4096 (both work manually)
-- winpeshl.ini present/absent (present = required; absent = boot never reaches startnet)
-- winpeshl.ini escaping (`\\` double vs `\` single — both work; single is current)
-- CRLF vs LF scripts (CRLF required; #8)
-- `/s /k` vs `/c` in winpeshl.ini (`/s /k` current, works)
-- disk 700M/900M/1G (900M correct)
-- GPT/EF00 vs MBR (both boot manually; GPT is the target)
-- q35 vs i440fx, pflash vs -bios OVMF (q35+pflash is what works)
-- `-cpu host` vs `max` (both work manually)
+Also available: `nix log /nix/store/acjmmx1hrccsr1fs3kapk819imv69d4g-winpe-qemu-check.drv`
+(same content, but NOTE: `nix log` on an older drv returned a truncated/older
+log once — prefer /tmp/v06fix2.log or re-run `nix build -L --keep-failed`).
 
-### Repro artifacts on disk
+`--keep-failed` keeps the whole build dir at
+`/nix/var/nix/builds/nix-<id>/build` (contains disk.img, autorun.cmd,
+autorun_result.log, VARS.fd, work/, env-vars; verified to work).
 
-- `.debug/` — disks (disk-swap.img=GOOD, disk-check6.img=current-scripts), extracts, roots/ (GC-root symlinks)
-- `.debug/buildtest/checkcmd.sh` — extracted exact builder buildCommand
-- Failed check outputs keep `/nix/store/*-winpe-qemu-check/diag/` (screendumps ppm, autorun_result.log, root.txt, builder-env.txt)
-- Screendump technique: `-monitor tcp:HOST:PORT` or `unix:mon.sock` + `screendump file.ppm` via nc/socat; convert with `ppmtojpeg` (nixpkgs#netpbm); view via read_file
-- Nixpkgs hivex binaries have broken `#!/bin/bash` shebang — patch with sed to real bash path
+## 2. THE REAL-HARDWARE FAILURE (v0.6.0 on the Legion)
 
-## Candidate explanations for the last blocker
+Screenshot evidence (user-provided): verbose startnet ran; [3] diskpart
+attempts happened; fallback scan ran through ALL letters (C..Z, saw V/Y/Z);
+"[!] ERROR: WinPE partition with autorun.cmd not found"; dropped to `cmd.exe`.
+⇒ `select disk 0` + `select partition 1` + `assign letter=W` did not mount the
+ESP on real hardware. QEMU never caught this because there disk 0/part 1 IS the
+ESP (single-partition disk).
 
-1. **Module autorun.cmd content** (vs my working replica): semantically near-identical, CRLF, but module has extra lines (failure-branch error box, comments, un-nested `wpeutil reboot` in no-payload branch). cmd parses whole `( )` blocks upfront — one bad construct anywhere in the block aborts the block. **NEXT TEST: build check disk but with replica autorun → boot.** If passes: binary-search module script lines.
-2. **Disk build order**: check uses single `mcopy -s $IMG/* ::/` glob (copies original 538MB LZMS boot.wim THEN overwrites with updated 538MB) vs manual per-dir copies. FAT allocation order differs. Possible FAT/long-filename weirdness.
-3. Guest desktop heap exhausted by second console window (start /wait child) — but replica with start /wait works manually, so only if combined with #1/#2.
+Why the ESP might not mount on real hardware (hypotheses, untested):
 
-## Fix candidates if module script is guilty
+- Multi-disk laptop → disk 0 ≠ the WinPE disk.
+- Partition 1 on the Legion GPT ≠ the ESP (Lenovo ships extra partitions; our
+  disko module puts WinPE at priority 2).
+- WinPE SAN policy leaving disks offline (WinPE default SAN = OfflineShared on
+  some media) → volumes never get letters.
+  The new startnet (san policy=onlineall + label lookup) addresses all three.
 
-- Reduce module autorun to replica shape (move failure-branch box out of the block / replace `%%` lines)
-- Or: keep module text but `call` the payload with `%~1` (my very first manual success used call; wine assertion needs update)
+## 3. THE LABEL-LOOKUP SCRIPT (current, uncommitted)
 
-## Check design (current)
+Location: `pkgs/winpe-flash/default.nix` → `startnetScript` (CRLF-converted).
+Flow:
 
-- TCG (-smp 1), q35, pflash OVMF_CODE+VARS(copy), -m 3072, 900M disk, 3 attempts × 900s, mtype+grep assert, debug diag dump on failure (remove once green)
-- QEMU from new-lock nixpkgs (f0l6wc)
+1. `san policy=onlineall` + `rescan` + `list volume` via diskpart → output to
+   `X:\dp.out`; **also echoed to console and startnet.log** (post-mortem gold).
+2. Retry loop (5×): `findstr /i "WinPE" X:\dp.out` → `for /f "tokens=2" %%v`
+   → VOLNUM = volume number → `select volume %VOLNUM%` + `assign letter=W`.
+3. `if exist W:\autorun.cmd goto :found` → copy breadcrumbs → call autorun.
+4. Fallback: scan letters C..Z (skip W,X) for autorun.cmd; copy breadcrumbs.
+5. Last resort: cmd.exe (human recovers with wpeutil reboot).
 
-## Environment gotchas encountered (operational)
+Known QEMU result with this script: **FAILS 3/3** (see /tmp/v06fix2.log).
+Working hypothesis: the label lookup itself or something in the new flow fails
+in the guest; the 7 embedded screendumps in /tmp/v06fix2.log will show
+`--- list volume ---` output from the guest = ground truth of what diskpart
+sees. VIEW THEM FIRST.
 
-- /tmp wiped between tool calls — use `.debug/` in project
-- nix store GC eats paths mid-debugging — root with `nix build <drv>^out -o roots/name`
-- hivex/netpbm/ppmtojpeg need nix shell/store-path usage
-- `nix eval --raw` for store paths; `nix derivation show` for buildCommand extraction
-- The `.debug/` workspace must stay out of git (add to .gitignore before commits!)
+## 4. PROVEN-GOOD BASELINE (what previously worked end-to-end in QEMU)
+
+- Disk: 900M GPT, single EF00 partition, FAT32 labeled WinPE, built with
+  per-dir mcopy; WIM = LZX export of ESD image 2 + winpeshl.ini (single
+  backslash form) + LF startnet (6f5wy-era content, double backslashes).
+- autorun.cmd = the hand-written replica (CRLF): header, for-loop payload
+  discovery, `call %~1 %~3` (or %1), small `if errorlevel 1 ( ... ) else (
+... )`, ping sleeps, wpeutil reboot. **This exact script is preserved in
+  git history: the file `extract2/swap-autorun.cmd` content — reconstructible
+  from the diff in the session log; also `.debug` corpus was DELETED (GC+rm),
+  so re-create if needed.**
+- QEMU: q35, TCG (-smp 1, -cpu max, -m 3072), pflash OVMF_CODE+VARS from
+  nixpkgs#OVMF.fd (f0l6wc qemu build), boot ~180-230s to payload success.
+- Success signature: guest reboots → QEMU exits → `mtype` ESP shows
+  autorun.log with "Flash staging completed successfully".
+
+## 5. SOLVED ROOT CAUSES (v0.5.0/v0.6.0 era) — do not re-litigate
+
+1. Bare BCD/blue hang → extract full /boot + /efi/microsoft trees (fonts,
+   bootres.dll, MUI).
+2. winload 0xc00000bb → boot.wim must be LZX (ESD LZMS rejected by ramdisk
+   loader).
+3. 1G-disk bootmgr hang → keep 900M (FAT32 geometry).
+4. `timeout /t` → use `ping -n N 127.0.0.1 >nul`.
+5. wine rejects quoted call/start targets → `%~1` unquoted (no-space paths).
+6. startnet literal `\\` → single backslashes.
+7. wine static assertion → `call %~1 %~3` (update greps together!).
+8. **LF batches abort at parenthesized blocks in real cmd** (Wine lenient) →
+   CRLF via `toCRLF`.
+9. Old-lock qemu build fails payload spawn → flake.lock bumped to
+   dc5d91f84032 (qemu f0l6wcpd9mfx0chsn27d45fyz8fwd3px works).
+10. `start /wait` → second console window → WinPE desktop heap cannot
+    allocate → "Not enough memory resources are available to process this
+    command." → use `call %~1 %~3` (same console, waits, propagates rc).
+    NOTE: `exit` (no /b) in a called batch kills cmd.exe — wine mock payloads
+    must use `exit /b`.
+
+## 6. CHECK DESIGN (current flake.nix)
+
+- `autorunScripts.<interactive|nonInteractive>` hoisted at perSystem `let`
+  level (feeds autorun + wim-injection checks).
+- `wim-injection` greps: wpeinit, san policy=onlineall, list volume, assign
+  letter=W, diskpart /s, for %%d in, call %%d:\autorun.cmd + CRLF tripwire on
+  startnet + both autorun variants.
+- `autorun` (wine): 4 cases; mock.bat uses `exit /b N` (NOT bare exit);
+  `wine cmd.exe /c ... || true` on failure-path tests (non-zero rc intended);
+  greps assert on the log.
+- `winpe-qemu`: TCG (-smp 1, -cpu max, -m 3072), q35, pflash OVMF
+  (nixpkgs#OVMF.fd), 900M disk, glob-mcopy build, watchdog screendumps via
+  unix mon.sock + socat every 20s, retry 3×900s, label-lookup startnet,
+  failure → dump_diag() into the build log (ESP listing, autorun.log,
+  startnet.log, injected scripts) + base64 last screendumps + exit 1.
+- CURRENT known status: **FAILS 3/3 with the label-lookup script** — see §3.
+
+## 7. OPERATIONAL GOTCHAS (all bitten, all real)
+
+- `/tmp` is a 6.8G tmpfs — nix-prefetch temp dirs filled it (disk full during
+  prefetch). Clean `/tmp/nix-*`. Use `.debug/` in the project for artifacts.
+- Root fs had 91% used at one point — `df -h /` and `/tmp` before long runs.
+- nix store GC deletes inputs mid-session — root with
+  `nix build <drv>^out -o roots/<name>` (GC root symlinks). `.debug/roots/`.
+- Store paths change between flake states — always re-derive via
+  `nix eval --raw .#...` / `nix build --print-out-paths`, never trust old
+  paths in notes for >1 hour.
+- hivex binaries from nixpkgs have broken `#!/bin/bash` shebang — copy +
+  sed to `$(which bash)`.
+- netpbm (ppmtojpeg) via `nix build nixpkgs#netpbm`.
+- Screendumps: `-monitor tcp:127.0.0.1:PORT,server,nowait` + `nc` (works), or
+  unix mon.sock + socat (works interactively; inside builder it produced NO
+  files once — unexplained, see §8).
+- `nix log <drv>` can return stale/older logs for re-used drv names — prefer
+  the `nix build -L` captured log file.
+- **Nix indented strings: `${` is interpolation — escape as `''${`** (bit me
+  with `${1:-}` in the updateScript).
+- **`grep … | head -n1` under pipefail SIGPIPEs when input has >1 match**
+  (exit 141) — use `grep -m1` or `tail -n1`. Bit the updateScript AND
+  winpe-flash arm.
+- Bash in builder = stdenv bash; `$'\r'` ANSI-C quoting works in buildCommand.
+- git commit messages: backticks get EXECUTED by the shell in -m strings —
+  avoid or use single-quoted heredoc.
+
+## 8. OPEN QUESTIONS / SUSPECTED (unverified)
+
+- RESOLVED 2026-09-12: label lookup failed in QEMU because the ESD WinPE has no
+  findstr.exe (§0.5). Not a diskpart/SAN-policy/parsing problem.
+- Whether `san policy=onlineall` alone would have fixed the real-hardware
+  mount (vs the label lookup being the necessary part). Both are in now.
+- Builder-embedded screendumps (base64 in `-L` log) are unreliable: markers
+  appeared but blocks were missing/truncated (see §1 recipe; count said 7, kept
+  dir had 0). Manual boot + TCP monitor is the proven path. Root cause of the
+  truncation still unexplained; not load-bearing.
+- The interactive-mode UX regression: flash-failure path always reboots (no
+  cmd.exe drop); interactive success uses silent ping not visible timeout.
+  User said backwards compat doesn't matter; interactive recovery niceness
+  could be restored later with small-in-block cmd.exe.
+
+## 9. NEXT STEPS (in order)
+
+1. DONE 2026-09-12: viewed 8 manual screendumps → root cause = missing
+   findstr.exe (§0.5); pure-batch parser fix + tripwires applied to
+   default.nix + flake.nix (uncommitted).
+2. DONE 2026-09-12: `winpe-qemu` GREEN. Discriminating evidence (success-path
+   breadcrumb dump added to the check): guest startnet.log shows
+   `Volume 1  WinPE  FAT32 ... Healthy  Hidden` + `[3] WinPE volume = 1` →
+   the LABEL parser fired (no Ltr column; tokens=2 handles the shift), NOT the
+   hardcoded fallback. ESP shows a "Hidden" info column — normal, ignored.
+3. DONE 2026-09-12: full `nix flake check -L` green (wim-injection findstr
+   tripwire + uefi-boot `select disk 0` assert included).
+4. Committed on main (this commit, untagged). Awaiting user go-ahead for:
+   push, dotfiles `nix flake update nixos-winpe` + commit/push, tag decision,
+   real-hardware retry (expected guest flow in §0.5).
+
+## 10. KEY STORE PATHS (volatile — re-derive if GC'd)
+
+- qemu (working, new lock): /nix/store/f0l6wcpd9mfx0chsn27d45fyz8fwd3px-qemu-host-cpu-only-11.1.0
+- OVMF: nixpkgs#OVMF.fd → FV/OVMF_CODE.fd + FV/OVMF_VARS.fd (+ OVMF.fd)
+- mtools: /nix/store/b1ndywa8j68pfgwsag2bq93f6136f1pw-mtools-4.0.49
+- wimlib: /nix/store/fmgrizq5lmvs39805xx7sdvpl8flrhkg-wimlib-1.14.5 (old lock)
+  — new lock wimlib may differ; derive via nix build.
+- gptfdisk: /nix/store/7x10akngwdym2ii6zmdl3anbl3ia7ins-gptfdisk-1.0.10
+- dosfstools: /nix/store/ifnpj2j6pffqjrh9d6s7fn96add9cp29-dosfstools-4.2
+- ESD (pinned): /nix/store/vf1mfb8n7g9c33rnr98zr2dd8h0n5wqy-26100.4349...esd
+- netpbm (ppmtojpeg), hivex (patch shebang), socat — via nix build.

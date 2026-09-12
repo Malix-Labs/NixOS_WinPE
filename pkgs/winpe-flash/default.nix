@@ -14,47 +14,87 @@ let
   '';
 
   startnetScript = pkgs.writeText "startnet.cmd" (toCRLF ''
-    rem DEBUG: echo on so headless screendumps show every stage
-    echo STARTNET-ENTERED
+    rem DEBUG breadcrumbs: every stage echoes to the console and X:\startnet.log
     set LOG=X:\startnet.log
+    echo STARTNET-ENTERED
     echo [1] startnet.cmd entered > %LOG%
     wpeinit
     echo [2] wpeinit done
     echo [2] wpeinit done >> %LOG%
-    rem Locate the WinPE partition (EF00 partitions get no drive letter by
-    rem default, so explicitly assign one via diskpart, then verify).
-    echo rescan > X:\vol.scr
-    echo select disk 0 >> X:\vol.scr
-    echo select partition 1 >> X:\vol.scr
-    echo assign letter=W >> X:\vol.scr
+    rem Bring all disks online (WinPE's default SAN policy can leave them
+    rem offline, which silently blocks drive-letter assignment on real
+    rem hardware) and enumerate every volume.
+    echo san policy=onlineall > X:\dp.scr
+    echo rescan >> X:\dp.scr
+    echo list volume >> X:\dp.scr
+    diskpart /s X:\dp.scr > X:\dp.out 2>&1
+    echo --- list volume ---
+    type X:\dp.out
+    type X:\dp.out >> %LOG%
+    rem Look the ESP up by its volume label instead of hardcoding disk and
+    rem partition numbers: multi-disk laptops and partition reordering make
+    rem 'select disk 0 / partition 1' a blind guess (failed on real hardware).
+    rem This ESD-extracted WinPE lacks some standard text tools, so dp.out is
+    rem parsed with pure-batch substring matching + delayed expansion only.
     set TRY=0
     :findpart
-    diskpart /s X:\vol.scr >> %LOG% 2>&1
-    del X:\vol.scr 2>nul
-    echo [3] diskpart attempt %TRY% done
-    echo [3] diskpart attempt %TRY% done >> %LOG%
+    set VOLNUM=
+    setlocal enabledelayedexpansion
+    for /f "delims=" %%L in (X:\dp.out) do (
+        set "LN=%%L"
+        if /i not "!LN:WinPE=!" == "!LN!" (
+            for /f "tokens=2" %%v in ("!LN!") do set "VOLNUM=%%v"
+        )
+    )
+    endlocal & set "VOLNUM=%VOLNUM%"
+    echo [3] WinPE volume = %VOLNUM%
+    echo [3] WinPE volume = %VOLNUM% >> %LOG%
+    if defined VOLNUM (
+        echo select volume %VOLNUM% > X:\av.scr
+        echo assign letter=W >> X:\av.scr
+        diskpart /s X:\av.scr >> %LOG% 2>&1
+    )
     if exist W:\autorun.cmd goto :found
     set /a TRY+=1
     if %TRY% lss 5 (
-        rem Partition may need a moment to appear after WinPE storage init.
-        echo rescan > X:\vol.scr
+        echo rescan > X:\dp.scr
+        echo list volume >> X:\dp.scr
+        diskpart /s X:\dp.scr > X:\dp.out 2>&1
+        echo --- list volume retry %TRY% ---
+        type X:\dp.out
+        type X:\dp.out >> %LOG%
         ping -n 3 127.0.0.1 >nul
         goto :findpart
     )
-    rem Fallback: scan all drive letters in case diskpart picked another one.
+    rem Last resort: legacy hardcoded disk/partition. Single-disk QEMU puts the
+    rem ESP at disk 0 partition 1; harmless elsewhere because assigning a letter
+    rem touches no data and W:\autorun.cmd gates everything below.
+    echo [4] label lookup failed, trying hardcoded disk 0 partition 1
+    echo select disk 0 > X:\av.scr
+    echo select partition 1 >> X:\av.scr
+    echo assign letter=W >> X:\av.scr
+    diskpart /s X:\av.scr >> %LOG% 2>&1
+    if exist W:\autorun.cmd goto :found
+    rem Final fallback: scan all drive letters in case the volume got one.
     echo [4] W: not found, scanning all letters
     echo [4] W: not found, scanning all letters >> %LOG%
     for %%d in (C D E F G H I J K L M N O P Q R S T U V Y Z) do (
         if exist %%d:\autorun.cmd (
             echo [5] found autorun.cmd on %%d:
             echo [5] found autorun.cmd on %%d: >> %LOG%
+            copy /y %LOG% %%d:\startnet.log >nul
             call %%d:\autorun.cmd %%d:
             goto :done
         )
     )
     echo [!] ERROR: WinPE partition with autorun.cmd not found
     echo [!] ERROR: WinPE partition with autorun.cmd not found >> %LOG%
-    cmd.exe
+    rem Fail fast: the validation check asserts autorun.log, and dropping to an
+    rem interactive cmd.exe here used to hang it until the 900s timeout. Give a
+    rem 20s window to read the screen, then reboot (BootNext is one-shot, so the
+    rem machine returns to NixOS).
+    ping -n 21 127.0.0.1 >nul
+    wpeutil reboot
     :found
     echo [5] found autorun.cmd on W:
     echo [5] found autorun.cmd on W: >> %LOG%

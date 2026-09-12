@@ -156,10 +156,21 @@
                 wimextract test.wim 1 /Windows/System32/startnet.cmd --dest-dir=extracted
 
                 grep -Fq "wpeinit" extracted/startnet.cmd
-                grep -Fq "select disk 0" extracted/startnet.cmd
+                grep -Fq "san policy=onlineall" extracted/startnet.cmd
+                grep -Fq "list volume" extracted/startnet.cmd
+                grep -Fq "assign letter=W" extracted/startnet.cmd
                 grep -Fq "diskpart /s" extracted/startnet.cmd
                 grep -Fq "for %%d in" extracted/startnet.cmd
-                grep -Fq "call %%d:\autorun.cmd" extracted/startnet.cmd
+                grep -Fq "call %%d:\\autorun.cmd" extracted/startnet.cmd
+                grep -Fq "enabledelayedexpansion" extracted/startnet.cmd
+
+                # Tripwire: the ESD-extracted WinPE ships NO findstr.exe
+                # (screendump-proven 2026-09-11: "'findstr' is not recognized").
+                # The ESP label lookup must stay pure-batch substring parsing.
+                if grep -qi "findstr" extracted/startnet.cmd; then
+                  echo "ERROR: startnet.cmd uses findstr, which is absent from ESD WinPE"
+                  exit 1
+                fi
 
                 # Regression tripwire: real Windows cmd aborts LF-only batches
                 # at parenthesized blocks; every generated script must be CRLF.
@@ -535,7 +546,7 @@
                     sed 's/^/  | /' autorun.cmd 2>/dev/null || true
                   }
 
-                  for attempt in 1 2 3; do
+                  for attempt in 1; do
                     echo "=== QEMU boot attempt $attempt ==="
                     cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
                     chmod +w VARS.fd
@@ -560,13 +571,19 @@
                     # so the log may exist but be incomplete on earlier kills).
                     if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flash staging completed successfully" autorun_result.log; then
                       echo "complete autorun.log found on attempt $attempt"
+                      # Breadcrumbs prove WHICH mount path fired (label lookup
+                      # vs hardcoded fallback) - load-bearing for real hardware.
+                      echo "--- guest startnet.log breadcrumbs ---"
+                      mtype -i disk.img@@1048576 ::/startnet.log 2>/dev/null || echo "(no startnet.log on ESP)"
                       break
                     fi
                     dump_diag "$attempt"
-                    if [ "$attempt" = 3 ]; then
+                    if [ "$attempt" = 1 ]; then
                       # Pixel-level post-mortem: embed the last screendumps as
                       # base64 PPM (decode: base64 -d < block | ppmtojpeg > out.jpg).
-                      for f in $(ls dbg-a$attempt-t*.ppm 2>/dev/null | sort -V | tail -3); do
+                      echo "screendump count: $(ls dbg-a$attempt-t*.ppm 2>/dev/null | wc -l)"
+                      for f in dbg-a$attempt-t*.ppm; do
+                        [ -f "$f" ] || continue
                         echo "=== SCREENDUMP $f (base64 ppm) ==="
                         base64 -w 76 "$f"
                       done
