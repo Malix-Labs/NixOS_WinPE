@@ -31,11 +31,20 @@ let
     echo --- list volume ---
     type X:\dp.out
     type X:\dp.out >> %LOG%
+    rem Persist evidence to the disk's first partition (the real ESP on the target laptop) so a failed run still leaves breadcrumbs + the volume table on disk.
+    rem Guarded to actual ESPs; in the QEMU check this is the WinPE partition itself (harmless extra file).
+    echo select disk 0 > X:\esp.scr
+    echo select partition 1 >> X:\esp.scr
+    echo assign letter=S >> X:\esp.scr
+    diskpart /s X:\esp.scr >> %LOG% 2>&1
+    if exist S:\EFI\ (
+        copy /y %LOG% S:\winpe-debug.log >nul 2>&1
+        copy /y X:\dp.out S:\winpe-dpout.log >nul 2>&1
+    )
     rem Look the ESP up by its volume label instead of hardcoding disk and
     rem partition numbers: multi-disk laptops and partition reordering make
     rem 'select disk 0 / partition 1' a blind guess (failed on real hardware).
-    rem This ESD-extracted WinPE lacks some standard text tools, so dp.out is
-    rem parsed with pure-batch substring matching + delayed expansion only.
+    rem This ESD-extracted WinPE lacks some standard text tools, so dp.out is parsed with pure-batch substring matching + delayed expansion only.
     set TRY=0
     :findpart
     set VOLNUM=
@@ -63,12 +72,12 @@ let
         echo --- list volume retry %TRY% ---
         type X:\dp.out
         type X:\dp.out >> %LOG%
+        if exist W:\ dir /b W:\ >> %LOG% 2>&1
         ping -n 3 127.0.0.1 >nul
         goto :findpart
     )
-    rem Last resort: legacy hardcoded disk/partition. Single-disk QEMU puts the
-    rem ESP at disk 0 partition 1; harmless elsewhere because assigning a letter
-    rem touches no data and W:\autorun.cmd gates everything below.
+    rem Last resort: legacy hardcoded disk/partition.
+    rem Single-disk QEMU puts the ESP at disk 0 partition 1; harmless elsewhere because assigning a letter touches no data and W:\autorun.cmd gates everything below.
     echo [4] label lookup failed, trying hardcoded disk 0 partition 1
     echo select disk 0 > X:\av.scr
     echo select partition 1 >> X:\av.scr
@@ -89,10 +98,9 @@ let
     )
     echo [!] ERROR: WinPE partition with autorun.cmd not found
     echo [!] ERROR: WinPE partition with autorun.cmd not found >> %LOG%
-    rem Fail fast: the validation check asserts autorun.log, and dropping to an
-    rem interactive cmd.exe here used to hang it until the 900s timeout. Give a
-    rem 20s window to read the screen, then reboot (BootNext is one-shot, so the
-    rem machine returns to NixOS).
+    if exist S:\EFI\ copy /y %LOG% S:\winpe-debug.log >nul 2>&1
+    rem Fail fast: the validation check asserts autorun.log, and dropping to an interactive cmd.exe here used to hang it until the 900s timeout.
+    rem Give a 20s window to read the screen, then reboot (BootNext is one-shot, so the machine returns to NixOS).
     ping -n 21 127.0.0.1 >nul
     wpeutil reboot
     :found

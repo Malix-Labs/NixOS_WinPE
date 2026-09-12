@@ -164,8 +164,7 @@
                 grep -Fq "call %%d:\\autorun.cmd" extracted/startnet.cmd
                 grep -Fq "enabledelayedexpansion" extracted/startnet.cmd
 
-                # Tripwire: the ESD-extracted WinPE ships NO findstr.exe
-                # (screendump-proven 2026-09-11: "'findstr' is not recognized").
+                # Tripwire: the ESD-extracted WinPE ships NO findstr.exe (screendump-proven 2026-09-11: "'findstr' is not recognized").
                 # The ESP label lookup must stay pure-batch substring parsing.
                 if grep -qi "findstr" extracted/startnet.cmd; then
                   echo "ERROR: startnet.cmd uses findstr, which is absent from ESD WinPE"
@@ -571,8 +570,7 @@
                     # so the log may exist but be incomplete on earlier kills).
                     if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flash staging completed successfully" autorun_result.log; then
                       echo "complete autorun.log found on attempt $attempt"
-                      # Breadcrumbs prove WHICH mount path fired (label lookup
-                      # vs hardcoded fallback) - load-bearing for real hardware.
+                      # Breadcrumbs prove WHICH mount path fired (label lookup vs hardcoded fallback) - load-bearing for real hardware.
                       echo "--- guest startnet.log breadcrumbs ---"
                       mtype -i disk.img@@1048576 ::/startnet.log 2>/dev/null || echo "(no startnet.log on ESP)"
                       break
