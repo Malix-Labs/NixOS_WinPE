@@ -1,13 +1,10 @@
 { pkgs }:
 let
-  # Windows cmd silently aborts LF-only batch files at parenthesized blocks;
-  # both scripts below must be CRLF (converted at their definitions).
+  # Windows cmd silently aborts LF-only batch files at parenthesized blocks; both scripts below must be CRLF (converted at their definitions).
   toCRLF = text: pkgs.lib.replaceStrings [ "\n" ] [ "\r\n" ] text;
 
-  # Why inject winpeshl.ini: the ESD WinPE's winpeshl.exe does not reliably run
-  # startnet.cmd when the file is absent (validated under QEMU: boots without
-  # it never reach autorun.cmd). Explicitly launching cmd with startnet.cmd
-  # guarantees our startup hook executes on every boot.
+  # Why inject winpeshl.ini: the ESD WinPE's winpeshl.exe does not reliably run startnet.cmd when the file is absent (validated under QEMU: boots without it never reach autorun.cmd).
+  # Explicitly launching cmd with startnet.cmd guarantees our startup hook executes on every boot.
   winpeshlIni = pkgs.writeText "winpeshl.ini" ''
     [LaunchApps]
     %SYSTEMROOT%\System32\cmd.exe, "/s /k startnet.cmd"
@@ -21,9 +18,7 @@ let
     wpeinit
     echo [2] wpeinit done
     echo [2] wpeinit done >> %LOG%
-    rem Bring all disks online (WinPE's default SAN policy can leave them
-    rem offline, which silently blocks drive-letter assignment on real
-    rem hardware) and enumerate every volume.
+    rem Bring all disks online (WinPE's default SAN policy can leave them offline, which silently blocks drive-letter assignment on real hardware) and enumerate every volume.
     echo san policy=onlineall > X:\dp.scr
     echo rescan >> X:\dp.scr
     echo list volume >> X:\dp.scr
@@ -41,9 +36,7 @@ let
         copy /y %LOG% S:\winpe-debug.log >nul 2>&1
         copy /y X:\dp.out S:\winpe-dpout.log >nul 2>&1
     )
-    rem Look the ESP up by its volume label instead of hardcoding disk and
-    rem partition numbers: multi-disk laptops and partition reordering make
-    rem 'select disk 0 / partition 1' a blind guess (failed on real hardware).
+    rem Look the ESP up by its volume label instead of hardcoding disk and partition numbers: multi-disk laptops and partition reordering make 'select disk 0 / partition 1' a blind guess (failed on real hardware).
     rem This ESD-extracted WinPE lacks some standard text tools, so dp.out is parsed with pure-batch substring matching + delayed expansion only.
     set TRY=0
     :findpart
@@ -185,16 +178,14 @@ pkgs.writeShellApplication {
       # Ensure boot.wim has the automated startnet hook to execute autorun.cmd
       if [ -f /mnt/WinPE/sources/boot.wim ]; then
         echo "Ensuring WinPE startup hook is configured in boot.wim..."
-        # Why inject winpeshl.ini: see its definition above - without it the
-        # WinPE boot never reaches startnet.cmd under QEMU validation.
+        # Why inject winpeshl.ini: see its definition above - without it the WinPE boot never reaches startnet.cmd under QEMU validation.
         wimlib-imagex update /mnt/WinPE/sources/boot.wim 1 --command="add ${winpeshlIni} /Windows/System32/winpeshl.ini" >/dev/null 2>&1 || :
         wimlib-imagex update /mnt/WinPE/sources/boot.wim 1 --command="add ${startnetScript} /Windows/System32/startnet.cmd" >/dev/null 2>&1 || :
         echo "WinPE startup hook verified."
       fi
 
-      # Locate WinPE boot number. Why grep -m1, not `| head -n1`: with
-      # pipefail, head closing the pipe early after multiple matches kills the
-      # pipeline with SIGPIPE (exit 141).
+      # Locate WinPE boot number.
+      # Why grep -m1, not `| head -n1`: with pipefail, head closing the pipe early after multiple matches kills the pipeline with SIGPIPE (exit 141).
       WINPE_BOOT_NUM=$($EFIBOOTMGR | grep -i "WinPE" | grep -o -m1 "Boot[0-9a-fA-F]\{4\}" | sed 's/Boot//' || :)
 
       if [ -z "$WINPE_BOOT_NUM" ]; then

@@ -9,11 +9,8 @@ let
 
   activePayloads = lib.filterAttrs (_: p: p.enable) cfg.payloads;
 
-  # Why CRLF: Windows cmd silently aborts batch files with LF-only line
-  # endings at parenthesized blocks (e.g. `if errorlevel 1 (`) - validated
-  # under QEMU where the LF script died right after start /wait, while the
-  # same logic as CRLF ran to completion. Wine's cmd is lenient, so the wine
-  # check cannot catch this.
+  # Why CRLF: Windows cmd silently aborts batch files with LF-only line endings at parenthesized blocks (e.g. `if errorlevel 1 (`) - validated under QEMU where the LF script died right after start /wait, while the same logic as CRLF ran to completion.
+  # Wine's cmd is lenient, so the wine check cannot catch this.
   toCRLF = text: lib.strings.replaceStrings [ "\n" ] [ "\r\n" ] text;
 
   defaultAutorun = pkgs.writeText "autorun.cmd" (toCRLF ''
@@ -80,16 +77,10 @@ let
     echo Staging firmware update...
     echo [WinPE] Executing flasher: %~1 %~3 >> %LOGFILE%
     rem Runs the payload synchronously (waits even for GUI-subsystem PE binaries).
-    rem Why call and not start /wait: start spawns a second console window and
-    rem WinPE's desktop heap cannot allocate it - "Not enough memory resources
-    rem are available to process this command." (validated under QEMU). call
-    rem executes in this console, waits, and propagates errorlevel.
-    rem Why unquoted %~1: wine cmd rejects quoted call targets ("Invalid name");
-    rem payload paths live on the ESP and contain no spaces.
+    rem Why call and not start /wait: start spawns a second console window and WinPE's desktop heap cannot allocate it - "Not enough memory resources are available to process this command." (validated under QEMU). call executes in this console, waits, and propagates errorlevel.
+    rem Why unquoted %~1: wine cmd rejects quoted call targets ("Invalid name"); payload paths live on the ESP and contain no spaces.
     call %~1 %~3
-    rem Why a small if-block, no goto and no long error text here: after a
-    rem start /wait, WinPE cmd fails re-reading large chunks of the batch file
-    rem from the ESP with "Not enough memory resources" (validated under QEMU).
+    rem Why a small if-block, no goto and no long error text here: after a start /wait, WinPE cmd fails re-reading large chunks of the batch file from the ESP with "Not enough memory resources" (validated under QEMU).
     rem Keep every post-start/wait read small.
     if errorlevel 1 (
         echo [WinPE] Flasher process failed. >> %LOGFILE%

@@ -171,8 +171,7 @@
                   exit 1
                 fi
 
-                # Regression tripwire: real Windows cmd aborts LF-only batches
-                # at parenthesized blocks; every generated script must be CRLF.
+                # Regression tripwire: real Windows cmd aborts LF-only batches at parenthesized blocks; every generated script must be CRLF.
                 for f in ${winpeFlashPkg.startnetScript} ${autorunScripts.interactive} ${autorunScripts.nonInteractive}; do
                   grep -q $'\r' "$f" || { echo "ERROR: $f is not CRLF"; exit 1; }
                 done
@@ -249,10 +248,7 @@
                   ];
                 }
                 ''
-                  # Static Assertion: the payload must run via `call` - synchronous
-                  # (waits for GUI-subsystem binaries too) and it does not spawn a
-                  # second console window: WinPE's desktop heap cannot allocate one
-                  # ("Not enough memory resources").
+                  # Static Assertion: the payload must run via `call` - synchronous (waits for GUI-subsystem binaries too) and it does not spawn a second console window: WinPE's desktop heap cannot allocate one ("Not enough memory resources").
                   grep -Fq 'call %~1 %~3' ${autorunInteractive}
                   grep -Fq 'call %~1 %~3' ${autorunNonInteractive}
 
@@ -272,13 +268,10 @@
 
                   # Test Case 1: Interactive mode - Mock executable succeeds (exit code 0)
                   install_mock_autorun ${autorunInteractive}
-                  # Why exit /b, not exit: with the payload invoked via `call`, a
-                  # bare `exit` would terminate the whole cmd.exe process instead
-                  # of returning to autorun.cmd (matches .exe behaviour).
+                  # Why exit /b, not exit: with the payload invoked via `call`, a bare `exit` would terminate the whole cmd.exe process instead of returning to autorun.cmd (matches .exe behaviour).
                   printf '@exit /b 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
 
-                  # Wine returns the autorun.cmd exit code; failure-path tests
-                  # intentionally end non-zero, so tolerate it and assert on the log.
+                  # Wine returns the autorun.cmd exit code; failure-path tests intentionally end non-zero, so tolerate it and assert on the log.
                   wine cmd.exe /c "C:\winpe\autorun.cmd" || true
                   grep -q "Flash staging completed successfully" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
@@ -465,9 +458,8 @@
                     disko.devices.disk.main = {
                       device = "disk.img";
                       type = "disk";
-                      # LZX-recompressed boot.wim (~540MB) plus boot environment
-                      # fits in 900M. Note: must stay <= 900M - at 1G mkfs.vfat
-                      # switches to 8K FAT32 clusters which bootmgr cannot read.
+                      # LZX-recompressed boot.wim (~540MB) plus boot environment fits in 900M.
+                      # Note: must stay <= 900M - at 1G mkfs.vfat switches to 8K FAT32 clusters which bootmgr cannot read.
                       imageSize = "900M";
                       content.type = "gpt";
                     };
@@ -484,9 +476,7 @@
               in
               pkgs.runCommand "winpe-qemu-check"
                 {
-                  # Why no KVM: Windows bootmgr hangs nondeterministically under
-                  # this host's KVM (~50% of runs), while TCG boots reliably;
-                  # TCG costs ~5min per boot which is acceptable for a check.
+                  # Why no KVM: Windows bootmgr hangs nondeterministically under this host's KVM (~50% of runs), while TCG boots reliably; TCG costs ~5min per boot which is acceptable for a check.
                   nativeBuildInputs = with pkgs; [
                     qemu_kvm
                     gptfdisk
@@ -499,8 +489,7 @@
                 }
                 ''
                   # 1. Create a 900MB disk image with GPT partition table and EF00 partition.
-                  # Why 900M: fits the LZX boot.wim (~540MB) + boot environment, and
-                  # mkfs.vfat picks a FAT32 geometry bootmgr can read (1G+ hangs).
+                  # Why 900M: fits the LZX boot.wim (~540MB) + boot environment, and mkfs.vfat picks a FAT32 geometry bootmgr can read (1G+ hangs).
                   truncate -s 900M disk.img
                   sgdisk --clear disk.img
                   sgdisk --new=1:2048:0 --typecode=1:EF00 --change-name=1:"WinPE" disk.img
@@ -510,8 +499,7 @@
                   mcopy -i disk.img@@1048576 -s ${winpeImg}/* ::/
 
                   # 3. Patch startnet.cmd + winpeshl.ini into sources/boot.wim.
-                  # Without the ini, WinPE's winpeshl.exe never reaches
-                  # startnet.cmd (validated under QEMU).
+                  # Without the ini, WinPE's winpeshl.exe never reaches startnet.cmd (validated under QEMU).
                   mkdir -p work
                   cp ${winpeImg}/sources/boot.wim work/boot.wim
                   chmod +w work/boot.wim
@@ -527,8 +515,7 @@
 
                   # 5. Boot QEMU with OVMF UEFI firmware under TCG emulation.
                   # Why q35 + pflash OVMF: winload is unreliable on legacy i440fx.
-                  # Why TCG: KVM on this workload hangs nondeterministically at
-                  # bootmgr; TCG boots reliably in ~4 minutes.
+                  # Why TCG: KVM on this workload hangs nondeterministically at bootmgr; TCG boots reliably in ~4 minutes.
                   # Windows PE boots in RAM, runs startnet.cmd -> diskpart assign -> autorun.cmd -> wpeutil reboot
                   dump_diag() {
                     echo "=== WINPE-QEMU DIAG (attempt $1) ==="
@@ -549,8 +536,7 @@
                     echo "=== QEMU boot attempt $attempt ==="
                     cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
                     chmod +w VARS.fd
-                    # Screendumps every 20s: the guest console is the only window
-                    # into pre-startnet failures (bootmgr/winload have no logs).
+                    # Screendumps every 20s: the guest console is the only window into pre-startnet failures (bootmgr/winload have no logs).
                     ( for t in $(seq 1 45); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
                     WATCHDOG=$!
                     timeout 900 qemu-system-x86_64 \
@@ -565,9 +551,7 @@
                       -display none \
                       -net none || true
                     kill $WATCHDOG 2>/dev/null || true
-                    # Success = complete autorun.log flushed by the guest before
-                    # wpeutil reboot (killing QEMU mid-run leaves FAT unflushed,
-                    # so the log may exist but be incomplete on earlier kills).
+                    # Success = complete autorun.log flushed by the guest before wpeutil reboot (killing QEMU mid-run leaves FAT unflushed, so the log may exist but be incomplete on earlier kills).
                     if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flash staging completed successfully" autorun_result.log; then
                       echo "complete autorun.log found on attempt $attempt"
                       # Breadcrumbs prove WHICH mount path fired (label lookup vs hardcoded fallback) - load-bearing for real hardware.
@@ -577,8 +561,7 @@
                     fi
                     dump_diag "$attempt"
                     if [ "$attempt" = 1 ]; then
-                      # Pixel-level post-mortem: embed the last screendumps as
-                      # base64 PPM (decode: base64 -d < block | ppmtojpeg > out.jpg).
+                      # Pixel-level post-mortem: embed the last screendumps as base64 PPM (decode: base64 -d < block | ppmtojpeg > out.jpg).
                       echo "screendump count: $(ls dbg-a$attempt-t*.ppm 2>/dev/null | wc -l)"
                       for f in dbg-a$attempt-t*.ppm; do
                         [ -f "$f" ] || continue

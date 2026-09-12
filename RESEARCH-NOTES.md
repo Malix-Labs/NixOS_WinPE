@@ -73,9 +73,13 @@ disk 0"`, and harmless on hardware (letter assignment touches no data;
   marshal errors, never returns). Wine is lenient anyway; winpe-qemu is the
   only real validator.
 
-**Remaining: `nix build .#checks.x86_64-linux.winpe-qemu -L` → full `nix flake
-check -L` → commit main (NO tag without user approval) → push → dotfiles `nix
-flake update nixos-winpe` → ask user about tag + real-hardware retry.**
+**Hardware round 2 (2026-09-12 afternoon):** user's two WinPE boots reached startnet; ESP got `startnet.log` (942B, Sep 12 14:06) but NO `autorun.log`; BIOS still GKCN64WW. The earlier "no startnet.log" was a false negative (fmask=0077 → permission denied swallowed by `2>/dev/null`). ESP listing (sudo): autorun.cmd (2589B) + firmware/GKCN65WW.exe staged correctly; boot.wim = 384,180,603B (~366MB) = an OLDER LZX "Microsoft Windows PE (amd64)" image (NOT the current 538MB winpe-image output) — ships diskpart/cmd/wpeutil/find.exe, no findstr — with the pre-850da04 pure-batch startnet injected. QEMU replica of the Legion layout (512M ESP + 1G raw + 512M swap + 2G WinPE at p4; SAME boot.wim copy + autorun bytes + payload; .debug/hwreplica) PASSES end-to-end (startnet.log 1023B: [3] WinPE volume = 2 → assign → [5] found autorun.cmd on W: → autorun ran → payload failed-in-VM as expected) → the hardware failure is hardware-specific, NOT layout/script-reproducible in QEMU.
+
+**Decisive next artifact: `sudo cat /mnt/WinPE/startnet.log`** (942B — smaller than the replica's 1023B, so its story differs).
+
+**Also new (850da04):** diagnostic startnet dumps breadcrumbs + dp.out to disk0/part1 as winpe-debug.log / winpe-dpout.log on every boot; winpe-auto-boot self-re-arms BootNext on every NixOS boot (observed 14:07 re-arm).
+
+**Remaining: full `nix flake check -L` (repo-wide comment reformat pending validation) → commit main (NO tag without user approval) → push → dotfiles `nix flake update nixos-winpe` → hardware round 3 with diagnostics.**
 
 Real-hardware expectation: `san policy=onlineall` brings the NVMe online,
 `list volume` shows the FAT32 `WinPE` partition (disko EF00), label match →

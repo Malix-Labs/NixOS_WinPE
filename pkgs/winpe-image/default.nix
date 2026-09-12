@@ -35,10 +35,8 @@ stdenvNoCC.mkDerivation {
 
     mkdir -p $out/{sources,boot,EFI/Boot}
 
-    # Why extract Image 1 wholesale: bootmgr requires more than just the BCD
-    # and bootloader to render its UI - fonts, bootres.dll (boot logo/graphics
-    # resources), and en-US MUI string tables. With only a bare BCD it paints
-    # a flat blue screen and hangs with no error text.
+    # Why extract Image 1 wholesale: bootmgr requires more than just the BCD and bootloader to render its UI - fonts, bootres.dll (boot logo/graphics resources), and en-US MUI string tables.
+    # With only a bare BCD it paints a flat blue screen and hangs with no error text.
     wimlib-imagex extract "$src" 1 /boot --dest-dir=$out --no-acls
     wimlib-imagex extract "$src" 1 /efi/microsoft --dest-dir=$out/EFI --no-acls
     wimlib-imagex extract "$src" 1 /efi/boot/bootx64.efi --dest-dir=$out/EFI/Boot --no-acls
@@ -46,20 +44,15 @@ stdenvNoCC.mkDerivation {
     mv $out/EFI/microsoft $out/EFI/Microsoft
 
     # Why export Image 2: contains genuine Microsoft Windows PE (amd64) operating system image.
-    # Why LZX: the ESD stores images LZMS-compressed (ESD-style), but bootmgr's
-    # ramdisk loader fails with 0xc00000bb reading LZMS WIMs; LZX is the
-    # compression used by bootable boot.wim on real install media.
+    # Why LZX: the ESD stores images LZMS-compressed (ESD-style), but bootmgr's ramdisk loader fails with 0xc00000bb reading LZMS WIMs; LZX is the compression used by bootable boot.wim on real install media.
     wimlib-imagex export "$src" 2 "$out/sources/boot.wim" --compress=LZX --boot
 
     runHook postInstall
   '';
 
-  # Update flow: fetch the Windows Update product catalog, locate the current
-  # client ESD, prefetch + structurally validate it, then rewrite this file.
-  # Every predictable failure (catalog layout, edition rename, missing boot
-  # files) exits with a named error BEFORE default.nix is touched. Structural
-  # changes that no script can predict (new distribution mechanism, image
-  # reorganization) fail loudly here and need a human-authored fix.
+  # Update flow: fetch the Windows Update product catalog, locate the current client ESD, prefetch + structurally validate it, then rewrite this file.
+  # Every predictable failure (catalog layout, edition rename, missing boot files) exits with a named error BEFORE default.nix is touched.
+  # Structural changes that no script can predict (new distribution mechanism, image reorganization) fail loudly here and need a human-authored fix.
   passthru.updateScript = writeShellApplication {
     name = "update-winpe-image";
     runtimeInputs = [
@@ -72,9 +65,7 @@ stdenvNoCC.mkDerivation {
       nix
     ];
     text = ''
-      # Target resolution: pass the flake checkout as $1 (recommended when
-      # running the store-built binary via `nix run`), or rely on $0 sitting
-      # next to default.nix when executed from a source tree.
+      # Target resolution: pass the flake checkout as $1 (recommended when running the store-built binary via `nix run`), or rely on $0 sitting next to default.nix when executed from a source tree.
       TARGET="''${1:-}"
       if [ -n "$TARGET" ] && [ -d "$TARGET" ]; then
         PKG_FILE="$TARGET/pkgs/winpe-image/default.nix"
@@ -150,8 +141,7 @@ stdenvNoCC.mkDerivation {
     [ -s "$out/EFI/Microsoft/boot/resources/bootres.dll" ]
     [ -s "$out/EFI/Microsoft/boot/fonts/wgl4_boot.ttf" ]
 
-    # Regression tripwire: bootmgr's ramdisk loader fails LZMS WIMs with
-    # 0xc00000bb; bootable boot.wim must stay LZX.
+    # Regression tripwire: bootmgr's ramdisk loader fails LZMS WIMs with 0xc00000bb; bootable boot.wim must stay LZX.
     wimlib-imagex info "$out/sources/boot.wim" | grep -q "Compression:.*LZX"
 
     runHook postInstallCheck
