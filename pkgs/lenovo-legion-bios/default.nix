@@ -3,12 +3,14 @@
   stdenvNoCC,
   fetchurl,
   innoextract,
+  p7zip,
   file,
   writeShellApplication,
   curl,
   nix,
   git,
   gnused,
+  gnugrep,
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "lenovo-legion-15ach6h-bios";
@@ -20,34 +22,57 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     hash = "sha256-QXb3lKgR+ILqMSwNjz68cR20xaixvJLccwGJjTIgwaA=";
   };
 
-  nativeBuildInputs = [ innoextract ];
+  nativeBuildInputs = [
+    innoextract
+    p7zip
+    gnused
+  ];
 
   unpackPhase = ''
     runHook preUnpack
     innoextract -e $src
+    # The outer Inno installer only wraps a 7z SFX carrying the real InsydeFlash toolchain (H2OFFT-W.exe, platform.ini, BIOS.fd and its drivers) - ship the toolchain itself so it can be driven directly under WinPE.
+    INNER=$(find . -maxdepth 2 -iname "GKCN*WW.exe")
+    7z x -otoolchain "$INNER" >/dev/null
     runHook postUnpack
   '';
 
   installPhase = ''
     runHook preInstall
-    EXE=$(find . -maxdepth 2 -iname "GKCN*WW.exe" | head -n1)
-    cp "$EXE" $out
+    mkdir -p $out
+    cp -r toolchain/. $out/
+    # Headless-WinPE hardening of platform.ini, each key patched inside its own section.
+    # [UI] Confirm=0 + Silent=1: no GUI; in silent mode FlashComplete Action=0 makes the tool return to the shell after flashing instead of rebooting itself.
+    # [AC_Adapter] Flag=0 + [Platform_Check] Flag=0: the battery and model probes are unreliable or unsatisfiable under WinPE (placeholder platform names AA/BB); the AC guard lives in winpe-flash instead.
+    # [Log_file] Flag=1: write H2OFFT.log next to the tool (lands on the ESP) for post-mortem evidence.
+    sed -i 's/^Confirm=1/Confirm=0/' $out/platform.ini
+    sed -i 's/^Silent=0/Silent=1/' $out/platform.ini
+    sed -i '/^\[AC_Adapter\]/,/^\[/ s/^Flag=1/Flag=0/' $out/platform.ini
+    sed -i '/^\[Platform_Check\]/,/^\[/ s/^Flag=1/Flag=0/' $out/platform.ini
+    sed -i '/^\[Log_file\]/,/^\[/ s/^Flag=0/Flag=1/' $out/platform.ini
+    # Silent success must return 0 (not the InsydeFlash default 3010 "reboot required"): the autorun script branches on a plain "if errorlevel 1", and 3010 also happens to be a value wine's cmd mishandles in "if errorlevel" comparisons.
+    sed -i 's/^RETURN_SUCCESSFUL=0,3010/RETURN_SUCCESSFUL=0,0/' $out/platform.ini
     runHook postInstall
   '';
 
   doInstallCheck = true;
   nativeInstallCheckInputs = [
     file
-    innoextract
+    gnugrep
   ];
 
   installCheckPhase = ''
     runHook preInstallCheck
-    [ -s "$out" ]
-    file -b "$out" | grep -q "PE32"
-    ! innoextract -l "$out" >/dev/null 2>&1
-    FILE_SIZE=$(stat -c%s "$out")
-    [ "$FILE_SIZE" -gt 1048576 ] && [ "$FILE_SIZE" -lt 67108864 ]
+    [ -s "$out/H2OFFT-W.exe" ]
+    [ -s "$out/BIOS.fd" ]
+    [ -s "$out/platform.ini" ]
+    file -b "$out/H2OFFT-W.exe" | grep -q "PE32"
+    sed -n '/^\[UI\]/,/^\[/p' "$out/platform.ini" | grep -q "^Silent=1"
+    sed -n '/^\[UI\]/,/^\[/p' "$out/platform.ini" | grep -q "^Confirm=0"
+    sed -n '/^\[AC_Adapter\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
+    sed -n '/^\[Platform_Check\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
+    sed -n '/^\[Log_file\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=1"
+    grep -q "^RETURN_SUCCESSFUL=0,0" "$out/platform.ini"
     runHook postInstallCheck
   '';
 

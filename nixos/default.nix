@@ -37,9 +37,14 @@ let
             _: p:
             let
               flags = lib.concatStringsSep " " p.silentFlags;
+              payloadPath =
+                if p.entryPoint == "" then
+                  "%~dp0firmware\\${p.targetFileName}"
+                else
+                  "%~dp0firmware\\${p.targetFileName}\\${p.entryPoint}";
             in
             ''
-              if exist "%~dp0firmware\${p.targetFileName}" call :run_payload "%~dp0firmware\${p.targetFileName}" "${p.targetFileName}" "${flags}"
+              if exist "${payloadPath}" call :run_payload "${payloadPath}" "${p.targetFileName}" "${flags}"
             ''
           ) activePayloads
         )
@@ -79,23 +84,42 @@ let
     rem Runs the payload synchronously (waits even for GUI-subsystem PE binaries).
     rem Why call and not start /wait: start spawns a second console window and WinPE's desktop heap cannot allocate it - "Not enough memory resources are available to process this command." (validated under QEMU). call executes in this console, waits, and propagates errorlevel.
     rem Why unquoted %~1: wine cmd rejects quoted call targets ("Invalid name"); payload paths live on the ESP and contain no spaces.
-    call %~1 %~3
-    rem Why a small if-block, no goto and no long error text here: after a start /wait, WinPE cmd fails re-reading large chunks of the batch file from the ESP with "Not enough memory resources" (validated under QEMU).
-    rem Keep every post-start/wait read small.
-    if errorlevel 1 (
-        echo [WinPE] Flasher process failed. >> %LOGFILE%
-        echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
-        echo [ERROR] Firmware flash utility failed! Check %LOGFILE% on the WinPE partition.
-        ping -n 4 127.0.0.1 >nul
-        wpeutil reboot
-        exit /b 1
-    )
+    rem Why cd /d: InsydeFlash locates platform.ini and BIOS.fd relative to the process working directory, not the executable path.
+    rem Why output capture: InsydeFlash's silent-mode exit codes are deliberately ambiguous (every failure is 259) and its error text only goes to the console - capturing it makes hardware post-mortems possible.
+    cd /d "%~dp1"
+    set POUT=%~dp1payload.out
+    call %~1 %~3 > "%POUT%" 2>&1
+    set FLASH_RC=%errorlevel%
+    type "%POUT%"
+    type "%POUT%" >> %LOGFILE%
+    rem Why the exit code is snapshotted into FLASH_RC: the type calls reset errorlevel, and the branch must test the payload's own result.
+    rem Why plain zero: platform.ini ships with RETURN_SUCCESSFUL patched to 0,0, so a completed silent flash returns 0 and every failure path returns nonzero.
+    if not "%FLASH_RC%"=="0" goto :flashfail
+    :flashok
     echo [WinPE] Flash staging completed successfully. Rebooting... >> %LOGFILE%
     echo.
     echo Flash staging completed. Rebooting system in 5 seconds...
     ping -n 6 127.0.0.1 >nul
     wpeutil reboot
     exit /b 0
+    :flashfail
+    echo [WinPE] Flasher process failed. >> %LOGFILE%
+    ${
+      if cfg.nonInteractive then
+        ''
+          echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
+          ping -n 4 127.0.0.1 >nul
+          wpeutil reboot
+        ''
+      else
+        ''
+          echo [ERROR] Firmware flash utility failed! Check %LOGFILE% on the WinPE partition.
+          rem 20s: enough to read or photograph the captured flasher output before the machine returns to NixOS.
+          ping -n 21 127.0.0.1 >nul
+          wpeutil reboot
+        ''
+    }
+    exit /b 1
 
     :done
   '');
@@ -184,6 +208,12 @@ in
                   "/SUPPRESSMSGBOXES"
                 ];
                 description = "Command-line arguments passed to the executable in WinPE.";
+              };
+
+              entryPoint = lib.mkOption {
+                type = lib.types.str;
+                default = "";
+                description = "Executable path relative to the staged payload directory when the package is a directory; empty means the package is a single file.";
               };
             };
           }

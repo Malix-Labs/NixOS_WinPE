@@ -17,7 +17,8 @@ in
       payloads."lenovo-bios" = {
         enable = lib.mkDefault true;
         package = biosPackage;
-        targetFileName = "GKCN65WW.exe";
+        targetFileName = "GKCN65WW";
+        entryPoint = "H2OFFT-W.exe";
         silentFlags = [
           "-s"
           "-noconfirm"
