@@ -212,10 +212,6 @@ in
     };
 
     systemd.tmpfiles.settings."10-winpe" = {
-      "${cfg.mountPoint}/autorun.cmd"."C+" = {
-        mode = "0755";
-        argument = "${cfg.autorunScript}";
-      };
       "${cfg.mountPoint}/firmware".${if cfg.cleanFirmwareDirectory then "D" else "d"} = {
         mode = "0755";
       };
@@ -233,6 +229,23 @@ in
         argument = "${p.package}";
       };
     }) activePayloads);
+
+    # Why a oneshot service instead of a tmpfiles C+ entry: C+ does not overwrite an existing destination (verified empirically 2026-09-12), so the ESP kept a stale v0.5-era autorun.cmd (787B vs the module's current script) across every switch - observed on the Legion: startnet logged "[5] found autorun.cmd on W:" yet no autorun.log ever appeared and the BIOS was never flashed.
+    # install overwrites the destination unconditionally on every boot.
+    systemd.services.winpe-stage-autorun = {
+      description = "Stage the current autorun.cmd onto the WinPE partition";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "local-fs.target" ];
+      before = [ "winpe-auto-boot.service" ];
+      path = with pkgs; [ coreutils ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        install -D -m 0755 ${cfg.autorunScript} ${cfg.mountPoint}/autorun.cmd
+      '';
+    };
 
     systemd.services.winpe-auto-boot = lib.mkIf (cfg.autoBootOnUpdate && activePayloads != { }) {
       description = "Schedule one-time UEFI BootNext into WinPE when new firmware is staged";

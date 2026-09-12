@@ -376,6 +376,39 @@
                   touch $out
                 '';
 
+            stage-autorun-service =
+              let
+                eval = evalNixos [
+                  nixosModules.default
+                  {
+                    hardware.winpe = {
+                      enable = true;
+                      payloads.testPayload = {
+                        package = pkgs.writeText "GKCN65WW.exe" "payload-content";
+                        targetFileName = "GKCN65WW.exe";
+                      };
+                    };
+                  }
+                ];
+                rules = lib.concatLists (
+                  lib.mapAttrsToList (
+                    path: types:
+                    lib.mapAttrsToList (
+                      type: rule: "${type} ${path} ${rule.mode} ${rule.user} ${rule.group} ${rule.age} ${rule.argument}"
+                    ) types
+                  ) eval.config.systemd.tmpfiles.settings."10-winpe"
+                );
+              in
+              assert !(lib.any (rule: lib.hasInfix "autorun.cmd" rule) rules);
+              pkgs.runCommand "check-stage-autorun-service"
+                {
+                  stageScript = pkgs.writeScript "winpe-stage-autorun" eval.config.systemd.services.winpe-stage-autorun.script;
+                }
+                ''
+                  grep -Fq "install -D -m 0755 ${eval.config.hardware.winpe.autorunScript}" "$stageScript"
+                  touch $out
+                '';
+
             uefi-boot = pkgs.testers.runNixOSTest {
               name = "winpe-uefi-boot";
               nodes.machine =
