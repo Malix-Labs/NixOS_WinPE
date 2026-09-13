@@ -242,28 +242,23 @@ in
     };
 
     systemd.tmpfiles.settings."10-winpe" = {
+      # Best-effort purge of unmanaged files in the firmware dir; note D only empties during boot-time tmpfiles runs (verified empirically 2026-09-13), so switch-time freshness of managed files is guaranteed by the winpe-stage-files service instead.
       "${cfg.mountPoint}/firmware".${if cfg.cleanFirmwareDirectory then "D" else "d"} = {
         mode = "0755";
       };
     }
+    # The image tree keeps the C+ first-copy semantics: it populates an empty ESP correctly but will not refresh an existing tree (delete the ESP contents to re-stage).
     // (lib.optionalAttrs cfg.populateImage {
       "${cfg.mountPoint}"."C+" = {
         mode = "0755";
         argument = "${cfg.imagePackage}";
       };
-    })
-    // (lib.mapAttrs' (_: p: {
-      name = "${cfg.mountPoint}/firmware/${p.targetFileName}";
-      value."C+" = {
-        mode = "0755";
-        argument = "${p.package}";
-      };
-    }) activePayloads);
+    });
 
-    # Why a oneshot service instead of a tmpfiles C+ entry: C+ does not overwrite an existing destination (verified empirically 2026-09-12), so the ESP kept a stale v0.5-era autorun.cmd (787B vs the module's current script) across every switch - observed on the Legion: startnet logged "[5] found autorun.cmd on W:" yet no autorun.log ever appeared and the BIOS was never flashed.
-    # install overwrites the destination unconditionally on every boot.
-    systemd.services.winpe-stage-autorun = {
-      description = "Stage the current autorun.cmd onto the WinPE partition";
+    # Why a oneshot service instead of tmpfiles: C+ does not overwrite existing destinations (verified empirically 2026-09-12) and D/e only empty during boot-time invocations (verified empirically 2026-09-13), so switch-time staging used to merge new content into stale ESP state.
+    # install and rm -rf + cp -r overwrite unconditionally, so every switch and every boot stages exactly the configured bytes.
+    systemd.services.winpe-stage-files = {
+      description = "Stage autorun.cmd and firmware payloads onto the WinPE partition";
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" ];
       before = [ "winpe-auto-boot.service" ];
@@ -274,6 +269,20 @@ in
       };
       script = ''
         install -D -m 0755 ${cfg.autorunScript} ${cfg.mountPoint}/autorun.cmd
+        ${lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            _: p:
+            if p.entryPoint != "" then
+              ''
+                rm -rf '${cfg.mountPoint}/firmware/${p.targetFileName}'
+                cp -r '${p.package}' '${cfg.mountPoint}/firmware/${p.targetFileName}'
+              ''
+            else
+              ''
+                install -D -m 0755 '${p.package}' '${cfg.mountPoint}/firmware/${p.targetFileName}'
+              ''
+          ) activePayloads
+        )}
       '';
     };
 

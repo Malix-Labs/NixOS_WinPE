@@ -218,13 +218,16 @@
                       ) eval.config.systemd.tmpfiles.settings."10-winpe"
                     );
                     conf = pkgs.writeText "10-winpe-${s}.conf" (lib.concatStringsSep "\n" rules);
+                    stageScript = pkgs.writeScript "winpe-stage-files-${s}" eval.config.systemd.services.winpe-stage-files.script;
                   in
                   ''
                     dir="$PWD/winpe-${s}/firmware"
                     mkdir -p "$dir"
                     echo "old" > "$dir/stale.exe"
                     substitute ${conf} "$PWD/conf-${s}.conf" --replace-fail "@DIR@" "$PWD/winpe-${s}"
+                    substitute ${stageScript} "$PWD/stage-${s}.sh" --replace-fail "@DIR@" "$PWD/winpe-${s}"
                     fakeroot systemd-tmpfiles --remove --create "$PWD/conf-${s}.conf"
+                    bash "$PWD/stage-${s}.sh"
                     ${if clean then "[ ! -f $dir/stale.exe ]" else "[ -f $dir/stale.exe ]"}
                     [ -f $dir/GKCN65WW.exe ]
                   '';
@@ -234,6 +237,8 @@
                   nativeBuildInputs = with pkgs; [
                     systemd
                     fakeroot
+                    coreutils
+                    bash
                   ];
                 }
                 ''
@@ -383,7 +388,7 @@
                   touch $out
                 '';
 
-            stage-autorun-service =
+            stage-files-service =
               let
                 eval = evalNixos [
                   nixosModules.default
@@ -391,8 +396,9 @@
                     hardware.winpe = {
                       enable = true;
                       payloads.testPayload = {
-                        package = pkgs.writeText "GKCN65WW.exe" "payload-content";
-                        targetFileName = "GKCN65WW.exe";
+                        package = pkgs.writeTextDir "mock.bat" "@exit /b 0";
+                        targetFileName = "mockdir";
+                        entryPoint = "mock.bat";
                       };
                     };
                   }
@@ -407,12 +413,15 @@
                 );
               in
               assert !(lib.any (rule: lib.hasInfix "autorun.cmd" rule) rules);
-              pkgs.runCommand "check-stage-autorun-service"
+              assert !(lib.any (rule: lib.hasInfix "mockdir" rule) rules);
+              pkgs.runCommand "check-stage-files-service"
                 {
-                  stageScript = pkgs.writeScript "winpe-stage-autorun" eval.config.systemd.services.winpe-stage-autorun.script;
+                  stageScript = pkgs.writeScript "winpe-stage-files" eval.config.systemd.services.winpe-stage-files.script;
                 }
                 ''
                   grep -Fq "install -D -m 0755 ${eval.config.hardware.winpe.autorunScript}" "$stageScript"
+                  grep -Fq "rm -rf '/mnt/WinPE/firmware/mockdir'" "$stageScript"
+                  grep -Fq "cp -r '${eval.config.hardware.winpe.payloads.testPayload.package}' '/mnt/WinPE/firmware/mockdir'" "$stageScript"
                   touch $out
                 '';
 
