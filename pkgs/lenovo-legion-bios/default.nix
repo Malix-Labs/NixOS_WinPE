@@ -59,6 +59,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     mv $out/msvcr90.dll $out/msvcp90.dll $out/Microsoft.VC90.CRT/
     mv $out/Microsoft.VC90.MFC.manifest $out/Microsoft.VC90.MFC/
     mv $out/mfc90u.dll $out/Microsoft.VC90.MFC/
+    # The vendor manifests list DLLs the SFX does not ship (msvcm90.dll; mfc90.dll, mfcm90.dll, mfcm90u.dll), and binding an incomplete private assembly fails with "side-by-side configuration is incorrect" - trim each file list to the shipped set (the app is native, so the managed-CRT and ANSI-MFC entries are unused anyway).
+    sed -i 's|<file name="msvcm90.dll" />||' $out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest
+    sed -i 's|<file name="mfc90.dll" />||; s|<file name="mfcm90.dll" />||; s|<file name="mfcm90u.dll" />||' $out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest
     runHook postInstall
   '';
 
@@ -85,6 +88,12 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     [ -f "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest" ]
     [ -f "$out/Microsoft.VC90.MFC/mfc90u.dll" ]
     [ ! -f "$out/msvcr90.dll" ]
+    grep -q 'name="msvcr90.dll"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    grep -q 'name="msvcp90.dll"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    ! grep -q 'name="msvcm90.dll"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    grep -q 'name="mfc90u.dll"' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
+    ! grep -q 'name="mfc90.dll"' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
+    ! grep -q 'name="mfcm90' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
     runHook postInstallCheck
   '';
 
