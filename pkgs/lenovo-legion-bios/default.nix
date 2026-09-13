@@ -52,6 +52,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -i '/^\[Log_file\]/,/^\[/ s/^Flag=0/Flag=1/' $out/platform.ini
     # Silent success must return 0 (not the InsydeFlash default 3010 "reboot required"): the autorun script branches on a plain "if errorlevel 1", and 3010 also happens to be a value wine's cmd mishandles in "if errorlevel" comparisons.
     sed -i 's/^RETURN_SUCCESSFUL=0,3010/RETURN_SUCCESSFUL=0,0/' $out/platform.ini
+    # Private SxS assembly layout: H2OFFT-W.exe resolves the VC90 CRT/MFC assemblies at startup and WinPE has no shared WinSxS store to fall back on, which is exactly why the flat SFX layout dies with "side-by-side configuration is incorrect".
+    # The loader probes <appdir>\<assemblyName>\<assemblyName>.manifest for private assemblies, so each assembly moves into its own subdirectory with manifest + DLLs.
+    mkdir -p $out/Microsoft.VC90.CRT $out/Microsoft.VC90.MFC
+    mv $out/Microsoft.VC90.CRT.manifest $out/Microsoft.VC90.CRT/
+    mv $out/msvcr90.dll $out/msvcp90.dll $out/Microsoft.VC90.CRT/
+    mv $out/Microsoft.VC90.MFC.manifest $out/Microsoft.VC90.MFC/
+    mv $out/mfc90u.dll $out/Microsoft.VC90.MFC/
     runHook postInstall
   '';
 
@@ -73,6 +80,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -n '/^\[Platform_Check\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
     sed -n '/^\[Log_file\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=1"
     grep -q "^RETURN_SUCCESSFUL=0,0" "$out/platform.ini"
+    [ -f "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest" ]
+    [ -f "$out/Microsoft.VC90.CRT/msvcr90.dll" ]
+    [ -f "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest" ]
+    [ -f "$out/Microsoft.VC90.MFC/mfc90u.dll" ]
+    [ ! -f "$out/msvcr90.dll" ]
     runHook postInstallCheck
   '';
 
