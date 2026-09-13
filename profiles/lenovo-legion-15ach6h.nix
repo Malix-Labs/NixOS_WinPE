@@ -18,13 +18,8 @@ in
         enable = lib.mkDefault true;
         package = biosPackage;
         targetFileName = "GKCN65WW";
-        entryPoint = "H2OFFT-W.exe";
-        silentFlags = [
-          "-s"
-          "-noconfirm"
-          "-n"
-          "-b"
-        ];
+        entryPoint = "FWUpdLcl.exe";
+        silentFlags = [ ];
       };
     };
   };

@@ -11,6 +11,8 @@
   git,
   gnused,
   gnugrep,
+  python3,
+  icoutils,
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "lenovo-legion-15ach6h-bios";
@@ -26,6 +28,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     innoextract
     p7zip
     gnused
+    (python3.withPackages (ps: [ ps.pefile ]))
   ];
 
   unpackPhase = ''
@@ -50,18 +53,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -i '/^\[AC_Adapter\]/,/^\[/ s/^Flag=1/Flag=0/' $out/platform.ini
     sed -i '/^\[Platform_Check\]/,/^\[/ s/^Flag=1/Flag=0/' $out/platform.ini
     sed -i '/^\[Log_file\]/,/^\[/ s/^Flag=0/Flag=1/' $out/platform.ini
-    # Silent success must return 0 (not the InsydeFlash default 3010 "reboot required"): the autorun script branches on a plain "if errorlevel 1", and 3010 also happens to be a value wine's cmd mishandles in "if errorlevel" comparisons.
+    # Silent success must return 0 (not the InsydeFlash default 3010 "reboot required"): the autorun script branches on a plain "if errorlevel 1".
     sed -i 's/^RETURN_SUCCESSFUL=0,3010/RETURN_SUCCESSFUL=0,0/' $out/platform.ini
-    # Private SxS assembly layout: H2OFFT-W.exe resolves the VC90 CRT/MFC assemblies at startup and WinPE has no shared WinSxS store to fall back on, which is exactly why the flat SFX layout dies with "side-by-side configuration is incorrect".
-    # The loader probes <appdir>\<assemblyName>\<assemblyName>.manifest for private assemblies, so each assembly moves into its own subdirectory with manifest + DLLs.
-    mkdir -p $out/Microsoft.VC90.CRT $out/Microsoft.VC90.MFC
-    mv $out/Microsoft.VC90.CRT.manifest $out/Microsoft.VC90.CRT/
-    mv $out/msvcr90.dll $out/msvcp90.dll $out/Microsoft.VC90.CRT/
-    mv $out/Microsoft.VC90.MFC.manifest $out/Microsoft.VC90.MFC/
-    mv $out/mfc90u.dll $out/Microsoft.VC90.MFC/
-    # The vendor manifests list DLLs the SFX does not ship (msvcm90.dll; mfc90.dll, mfcm90.dll, mfcm90u.dll), and binding an incomplete private assembly fails with "side-by-side configuration is incorrect" - trim each file list to the shipped set (the app is native, so the managed-CRT and ANSI-MFC entries are unused anyway).
-    sed -i 's|<file name="msvcm90.dll" />||' $out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest
-    sed -i 's|<file name="mfc90.dll" />||; s|<file name="mfcm90.dll" />||; s|<file name="mfcm90u.dll" />||' $out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest
+    # The ESD-extracted WinPE cannot create activation contexts for 32-bit applications: every manifest-bearing binary fails with ERROR_SXS_CANT_GEN_ACTCTX regardless of manifest content (vendor dependencies, trimmed private assemblies and dependency-free manifests all fail identically - validated under QEMU and on hardware 2026-09-13).
+    # Zeroing the RT_MANIFEST directory entry counts removes the manifest resource without touching any other PE structure, so the loader uses the default context and the plain DLL search order, resolving the vendor VC90 DLLs flat in the application directory.
+    for f in "$out"/*.exe "$out"/*.dll; do
+      python3 ${./strip-manifest.py} "$f"
+    done
     runHook postInstall
   '';
 
@@ -69,31 +67,28 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   nativeInstallCheckInputs = [
     file
     gnugrep
+    icoutils
   ];
 
   installCheckPhase = ''
     runHook preInstallCheck
     [ -s "$out/H2OFFT-W.exe" ]
+    [ -s "$out/FWUpdLcl.exe" ]
     [ -s "$out/BIOS.fd" ]
     [ -s "$out/platform.ini" ]
-    file -b "$out/H2OFFT-W.exe" | grep -q "PE32"
+    file -b "$out/FWUpdLcl.exe" | grep -q "PE32"
     sed -n '/^\[UI\]/,/^\[/p' "$out/platform.ini" | grep -q "^Silent=1"
     sed -n '/^\[UI\]/,/^\[/p' "$out/platform.ini" | grep -q "^Confirm=0"
     sed -n '/^\[AC_Adapter\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
     sed -n '/^\[Platform_Check\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
     sed -n '/^\[Log_file\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=1"
     grep -q "^RETURN_SUCCESSFUL=0,0" "$out/platform.ini"
-    [ -f "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest" ]
-    [ -f "$out/Microsoft.VC90.CRT/msvcr90.dll" ]
-    [ -f "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest" ]
-    [ -f "$out/Microsoft.VC90.MFC/mfc90u.dll" ]
-    [ ! -f "$out/msvcr90.dll" ]
-    grep -q 'name="msvcr90.dll"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
-    grep -q 'name="msvcp90.dll"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
-    ! grep -q 'name="msvcm90.dll"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
-    grep -q 'name="mfc90u.dll"' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
-    ! grep -q 'name="mfc90.dll"' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
-    ! grep -q 'name="mfcm90' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
+    for f in "$out"/*.exe "$out"/*.dll; do
+      if wrestool --list "$f" | grep -qE "type=24 --name"; then
+        echo "ERROR: $f still embeds a manifest resource" >&2
+        exit 1
+      fi
+    done
     runHook postInstallCheck
   '';
 
@@ -129,8 +124,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     '';
   };
 
-  meta = {
-    description = "Official Lenovo Legion 5 15ACH6H BIOS and Embedded Controller firmware updater";
+  meta = with lib; {
+    description = "Official Lenovo Legion 15ACH6H BIOS and Embedded Controller firmware updater";
     homepage = "https://pcsupport.lenovo.com/products/laptops-and-netbooks/legion-series/legion-5-15ach6h/";
     license = lib.licenses.unfree;
     sourceProvenance = [ lib.sourceTypes.binaryFirmware ];
