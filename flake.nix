@@ -420,6 +420,9 @@
                 }
                 ''
                   grep -Fq "install -D -m 0755 ${eval.config.hardware.winpe.autorunScript}" "$stageScript"
+                  # boot.wim must be deployed on every switch: a stale image is what the
+                  # 2026-09-16 hardware round tripped over (tmpfiles C+ never overwrites).
+                  grep -Fq "install -D -m 0755 ${eval.config.hardware.winpe.imagePackage}/sources/boot.wim" "$stageScript"
                   grep -Fq "rm -rf '/mnt/WinPE/firmware/mockdir'" "$stageScript"
                   grep -Fq "cp -r '${eval.config.hardware.winpe.payloads.testPayload.package}' '/mnt/WinPE/firmware/mockdir'" "$stageScript"
                   touch $out

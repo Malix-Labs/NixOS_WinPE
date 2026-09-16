@@ -269,6 +269,14 @@ in
       };
       script = ''
         install -D -m 0755 ${cfg.autorunScript} ${cfg.mountPoint}/autorun.cmd
+        # Deploy the current boot.wim unconditionally: tmpfiles C+ never overwrites an
+        # existing tree, so the booted image would stay frozen at whatever version first
+        # populated the partition. A stale boot.wim reproduces the 32-bit SxS failure on
+        # real hardware (validated 2026-09-16: a 422MB setup-PE boot.wim survived a full
+        # switch that staged the 590MB WinRE-based image; the flasher then died at
+        # ERROR_SXS_CANT_GEN_ACTCTX exactly like the old base image dictates).
+        # winpe-auto-boot runs after this service and re-injects the startnet hook.
+        install -D -m 0755 ${cfg.imagePackage}/sources/boot.wim ${cfg.mountPoint}/sources/boot.wim
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (
             _: p:
