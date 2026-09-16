@@ -507,7 +507,7 @@
                     disko.devices.disk.main = {
                       device = "disk.img";
                       type = "disk";
-                      # LZX-recompressed boot.wim (~540MB) plus boot environment fits in 900M.
+                      # WinRE-based LZX-recompressed boot.wim (~595MB) plus boot environment fits in 900M.
                       # Note: must stay <= 900M - at 1G mkfs.vfat switches to 8K FAT32 clusters which bootmgr cannot read.
                       imageSize = "900M";
                       content.type = "gpt";
@@ -515,9 +515,20 @@
                     hardware.winpe = {
                       enable = true;
                       nonInteractive = true;
-                      payloads.testPayload = {
-                        package = pkgs.writeText "mock-flash.cmd" "@echo [WinPE VM Execution] Staging and Flash completed successfully\r\n@exit /b 0\r\n";
-                        targetFileName = "mock-flash.cmd";
+                      # Real flasher payload, not a mock: FWUpdLcl.exe is 32-bit and
+                      # manifest-less, so booting and running it validates the whole
+                      # WOW64 + SxS graft chain end-to-end. Under QEMU it fails with
+                      # "Unknown or Unsupported Platform" (no Intel ME present) after
+                      # printing its banner - which is exactly the assertion below.
+                      payloads.lenovo-bios = {
+                        package = pkgs.callPackage ./pkgs/lenovo-legion-bios { };
+                        targetFileName = "GKCN65WW";
+                        entryPoint = "FWUpdLcl.exe";
+                        silentFlags = [
+                          "-F"
+                          "BIOS.fd"
+                          "-Y"
+                        ];
                       };
                     };
                   }
@@ -557,10 +568,15 @@
                   mcopy -o -i disk.img@@1048576 work/boot.wim ::/sources/boot.wim
 
                   # 4. Stage generated autorun.cmd and payload from NixOS module
+                  # The real payload is a directory tree (FWUpdLcl.exe, BIOS.fd, platform.ini);
+                  # copy it wholesale to firmware/GKCN65WW like the stage-files service does.
                   cp ${diskoEval.config.hardware.winpe.autorunScript} autorun.cmd
                   mcopy -o -i disk.img@@1048576 autorun.cmd ::/autorun.cmd
                   mmd -i disk.img@@1048576 ::/firmware
-                  mcopy -o -i disk.img@@1048576 ${diskoEval.config.hardware.winpe.payloads.testPayload.package} ::/firmware/mock-flash.cmd
+                  mmd -i disk.img@@1048576 ::/firmware/GKCN65WW
+                  for f in ${diskoEval.config.hardware.winpe.payloads.lenovo-bios.package}/*; do
+                    mcopy -o -i disk.img@@1048576 "$f" ::/firmware/GKCN65WW/$(basename "$f")
+                  done
 
                   # 5. Boot QEMU with OVMF UEFI firmware under TCG emulation.
                   # Why q35 + pflash OVMF: winload is unreliable on legacy i440fx.
@@ -586,11 +602,12 @@
                     cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
                     chmod +w VARS.fd
                     # Screendumps every 20s: the guest console is the only window into pre-startnet failures (bootmgr/winload have no logs).
-                    ( for t in $(seq 1 45); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
+                    ( for t in $(seq 1 60); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
                     WATCHDOG=$!
-                    timeout 900 qemu-system-x86_64 \
+                    # Timeout 1200: WinRE-based boot.wim (~595MB) extracts slower under TCG than the old setup-PE image did.
+                    timeout 1200 qemu-system-x86_64 \
                       -machine q35 \
-                      -m 3072 \
+                      -m 4096 \
                       -smp 1 \
                       -cpu max \
                       -drive if=pflash,format=raw,readonly=on,file=${pkgs.OVMF.fd}/FV/OVMF_CODE.fd \
@@ -601,7 +618,10 @@
                       -net none || true
                     kill $WATCHDOG 2>/dev/null || true
                     # Success = complete autorun.log flushed by the guest before wpeutil reboot (killing QEMU mid-run leaves FAT unflushed, so the log may exist but be incomplete on earlier kills).
-                    if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flash staging completed successfully" autorun_result.log; then
+                    # With the real flasher payload the run ends in the fail branch under QEMU
+                    # (no Intel ME -> "Unsupported Platform"), so completion is marked by the
+                    # flasher-banner lines the autorun types into the log before branching.
+                    if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Unsupported Platform" autorun_result.log; then
                       echo "complete autorun.log found on attempt $attempt"
                       # Breadcrumbs prove WHICH mount path fired (label lookup vs hardcoded fallback) - load-bearing for real hardware.
                       echo "--- guest startnet.log breadcrumbs ---"
@@ -622,8 +642,10 @@
                     fi
                   done
 
-                  # 6. Assert that autorun.log contains the success message
-                  grep "Flash staging completed successfully" autorun_result.log
+                  # 6. Assert the real 32-bit flasher executed: FWUpdLcl's banner in the log
+                  # proves the WOW64 loader, the SxS graft chain and the payload all work
+                  # (it must print the banner before dying with "Unsupported Platform" on VMs).
+                  grep "Intel (R) Firmware Update Utility" autorun_result.log
 
                   touch $out
                 '';
