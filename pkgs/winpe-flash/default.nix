@@ -18,6 +18,15 @@ let
     wpeinit
     echo [2] wpeinit done
     echo [2] wpeinit done >> %LOG%
+    rem [2b] Register the ESD-derived x86 SxS assembly Winners before any 32-bit process launch:
+    rem the SxS binder resolves system assemblies through this registry index, which the WinRE
+    rem base ships as files but not as registry state. The batch is generated at image build
+    rem time from the same ESD's SOFTWARE hive (pkgs/winpe-image), so it stays version-current
+    rem across ESD updates. Runtime reg add never rewrites the hive file.
+    if exist %SYSTEMROOT%\sxs-winners.cmd (
+        call %SYSTEMROOT%\sxs-winners.cmd >> %LOG% 2>&1
+        echo [2b] sxs-winners registry import done >> %LOG%
+    )
     rem Bring all disks online (WinPE's default SAN policy can leave them offline, which silently blocks drive-letter assignment on real hardware) and enumerate every volume.
     echo san policy=onlineall > X:\dp.scr
     echo rescan >> X:\dp.scr
