@@ -19,7 +19,14 @@ in
         package = biosPackage;
         targetFileName = "GKCN65WW";
         entryPoint = "FWUpdLcl.exe";
-        silentFlags = [ ];
+        # FWUpdLcl CLI flags: -F selects the flash image, -Y auto-accepts the prompts.
+        # QEMU-validated: with these flags FWUpdLcl runs end-to-end and fails cleanly with
+        # "Unknown or Unsupported Platform" where no matching hardware exists (RESEARCH-NOTES.md §0.6).
+        silentFlags = [
+          "-F"
+          "BIOS.fd"
+          "-Y"
+        ];
       };
     };
   };
