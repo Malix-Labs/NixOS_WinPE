@@ -90,6 +90,12 @@ let
     set POUT=%~dp1payload.out
     call %~1 %~3 > "%POUT%" 2>&1
     set FLASH_RC=%errorlevel%
+    rem DEBUG: the exit code is the only discriminator between "flasher ran and failed"
+    rem (1/259/3010 after printing something) and "flasher never started" (9009) -
+    echo [WinPE] Flasher exit code: %FLASH_RC% >> %LOGFILE%
+    if not exist "%POUT%" (
+      echo [WinPE] WARNING: payload.out was not created - the flasher almost certainly failed at process creation ^(activation context^). >> %LOGFILE%
+    )
     type "%POUT%"
     type "%POUT%" >> %LOGFILE%
     rem Why the exit code is snapshotted into FLASH_RC: the type calls reset errorlevel, and the branch must test the payload's own result.
@@ -114,9 +120,9 @@ let
       else
         ''
           echo [ERROR] Firmware flash utility failed! Check %LOGFILE% on the WinPE partition.
-          rem 20s: enough to read or photograph the captured flasher output before the machine returns to NixOS.
-          ping -n 21 127.0.0.1 >nul
-          wpeutil reboot
+          echo [DEBUG] Dropping to an interactive console for hands-on debugging. Reboot later with: wpeutil reboot
+          rem Interactive mode keeps the session open on purpose (the user runs the payload by hand when the automated launch dies at process creation); nonInteractive=true is what the check exercises, so this cannot hang it.
+          cmd.exe /k
         ''
     }
     exit /b 1
