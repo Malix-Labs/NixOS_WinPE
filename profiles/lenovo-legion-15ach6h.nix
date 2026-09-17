@@ -18,15 +18,17 @@ in
         enable = lib.mkDefault true;
         package = biosPackage;
         targetFileName = "GKCN65WW";
-        entryPoint = "FWUpdLcl.exe";
-        # FWUpdLcl CLI flags: -F selects the flash image, -Y auto-accepts the prompts.
-        # QEMU-validated: with these flags FWUpdLcl runs end-to-end and fails cleanly with
-        # "Unknown or Unsupported Platform" where no matching hardware exists (RESEARCH-NOTES.md §0.6).
-        silentFlags = [
-          "-F"
-          "BIOS.fd"
-          "-Y"
-        ];
+        # H2OFFT-W.exe (Insyde flash tool) is the actual BIOS updater shipped in the
+        # vendor package for this AMD machine. FWUpdLcl.exe, also present in the SFX,
+        # is Intel's MEI-channel updater (banner "Intel (R) Firmware Update Utility"):
+        # on real hardware round 11 it ran end-to-end (our SxS fix works on the
+        # 15ACH6H) but stopped at "Error 8743: Cannot locate hardware platform
+        # identification" - it identifies platforms through Intel ME/MEI, which this
+        # AMD machine does not have. H2OFFT-W runs headless purely from the hardened
+        # platform.ini ([UI] Silent=1 Confirm=0, [Option] Flag=0 auto-flash, FDFile
+        # auto-located from CWD = BIOS.fd), so it is invoked WITHOUT CLI flags.
+        entryPoint = "H2OFFT-W.exe";
+        silentFlags = [ ];
       };
     };
   };
