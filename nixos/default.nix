@@ -262,10 +262,20 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" ];
       before = [ "winpe-auto-boot.service" ];
-      path = with pkgs; [ coreutils ];
+      path = with pkgs; [ coreutils systemd ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+        # Why this ExecStartPost: winpe-auto-boot is oneshot RemainAfterExit, so at
+        # BOOT time it injects the start hook into whatever boot.wim is staged, and
+        # only earlier switches see the result. Since the winpe-image deploy fix
+        # (868e3ef) every switch replaces boot.wim with pristine bytes AFTER that
+        # boot's arm run, stripping the hook again - validated 2026-09-17 16:13
+        # (round 12 pre-check: pristine 590MB boot.wim + stock recenv.ini on the
+        # partition right after a switch). Restarting winpe-auto-boot here re-runs
+        # the arm on the freshly staged file at switch time, keeping the invariant
+        # "every switch leaves boot.wim hook-injected" true for the next boot.
+        ExecStartPost = "${pkgs.systemd}/bin/systemctl try-restart winpe-auto-boot.service";
       };
       script = ''
         install -D -m 0755 ${cfg.autorunScript} ${cfg.mountPoint}/autorun.cmd
