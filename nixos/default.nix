@@ -262,7 +262,10 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "local-fs.target" ];
       before = [ "winpe-auto-boot.service" ];
-      path = with pkgs; [ coreutils systemd ];
+      path = with pkgs; [
+        coreutils
+        systemd
+      ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
