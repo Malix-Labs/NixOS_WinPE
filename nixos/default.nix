@@ -278,7 +278,11 @@ in
         # partition right after a switch). Restarting winpe-auto-boot here re-runs
         # the arm on the freshly staged file at switch time, keeping the invariant
         # "every switch leaves boot.wim hook-injected" true for the next boot.
-        ExecStartPost = "${pkgs.systemd}/bin/systemctl try-restart winpe-auto-boot.service";
+        # The try-restart is forked with & so it CANNOT block this service: a
+        # blocking restart deadlocks the switch activation transaction (validated
+        # 2026-09-17 16:24: stage's ExecStartPost blocked on the arm's pending
+        # restart job 9293, arm never left Starting, `nh os switch` hung 10+ min).
+        ExecStartPost = "${pkgs.util-linux}/bin/setsid ${pkgs.bash}/bin/bash -c '${pkgs.systemd}/bin/systemctl try-restart winpe-auto-boot.service </dev/null >/dev/null 2>&1 &'";
       };
       script = ''
         install -D -m 0755 ${cfg.autorunScript} ${cfg.mountPoint}/autorun.cmd
