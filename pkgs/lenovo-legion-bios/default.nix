@@ -55,11 +55,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -i '/^\[Log_file\]/,/^\[/ s/^Flag=0/Flag=1/' $out/platform.ini
     # Silent success must return 0 (not the InsydeFlash default 3010 "reboot required"): the autorun script branches on a plain "if errorlevel 1".
     sed -i 's/^RETURN_SUCCESSFUL=0,3010/RETURN_SUCCESSFUL=0,0/' $out/platform.ini
-    # The ESD-extracted WinPE cannot create activation contexts for 32-bit applications: every manifest-bearing binary fails with ERROR_SXS_CANT_GEN_ACTCTX regardless of manifest content (vendor dependencies, trimmed private assemblies and dependency-free manifests all fail identically - validated under QEMU and on hardware 2026-09-13).
-    # Zeroing the RT_MANIFEST directory entry counts removes the manifest resource without touching any other PE structure, so the loader uses the default context and the plain DLL search order, resolving the vendor VC90 DLLs flat in the application directory.
-    for f in "$out"/*.exe "$out"/*.dll; do
-      python3 ${./strip-manifest.py} "$f"
-    done
+    # The RT_MANIFEST strip step is GONE as of 2026-09-18: H2OFFT-W runs an embedded
+    # Authenticode WinVerifyTrust pass over EVERY companion tool at startup
+    # (validated under wine: WinVerifyTrust calls on FlsHook.exe/FWUpdLcl.exe trace
+    # dump_file_info; a stripped FWUpdLcl.exe returns TRUST_E_BAD_DIGEST 0x80096010
+    # and the tool refuses with the "malware installed ... invalid with signature
+    # check" alert; on hardware round 12 that was a silent 0-byte exit). The old
+    # motivation for stripping (32-bit actctx 14001 on WinPE) predates the
+    # sxs-winners-graft environment (§0.6); whether an embedded-manifest 32-bit exe
+    # still fails actctx in the NEW environment is validated by the winpe-qemu
+    # check booting H2OFFT-W itself - if that check ever turns red with an SxS
+    # exit code, revisit with an official-files-only alternative.
     runHook postInstall
   '';
 
@@ -84,9 +90,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -n '/^\[Log_file\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=1"
     grep -q "^RETURN_SUCCESSFUL=0,0" "$out/platform.ini"
     for f in "$out"/*.exe "$out"/*.dll; do
-      if wrestool --list "$f" | grep -qE "type=24 --name"; then
-        echo "ERROR: $f still embeds a manifest resource" >&2
-        exit 1
+      # The strip step is gone (see install phase): the vendor toolchain must stay
+      # byte-identical or H2OFFT-W's integrity verification rejects it. Assert the
+      # embedded manifests are still present in the files that carry one.
+      if [ "$(basename "$f")" = "H2OFFT-W.exe" ]; then
+        wrestool --list "$f" | grep -qE "type=24 --name" || { echo "ERROR: $f lost its manifest - toolchain bytes were modified" >&2; exit 1; }
       fi
     done
     runHook postInstallCheck
