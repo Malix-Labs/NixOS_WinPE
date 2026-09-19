@@ -67,6 +67,21 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # check booting H2OFFT-W itself - if that check ever turns red with an SxS
     # exit code, revisit with an official-files-only alternative.
     runHook postInstall
+
+    # VC90 MFC private-assembly fallback (RESEARCH-NOTES.md round 19): H2OFFT-W.exe's
+    # embedded manifest requests Microsoft.VC90.MFC 9.0.21022.8, which the ESD does NOT
+    # ship at all (VC90 CRT only). The SxS binder's private-assembly lookup is a
+    # "<AssemblyName>\" directory next to the exe, so the vendor's own files must be
+    # laid out there. All bytes are vendor-identical: mfc90u.dll is copied verbatim
+    # (its Authenticode signature - checked by H2OFFT-W's own WinVerifyTrust pass over
+    # companions - stays valid), and the manifest is the vendor-shipped
+    # Microsoft.VC90.MFC.manifest text trimmed to the file set this toolchain actually
+    # carries (mfc90u.dll only). Manifest files are not signature-checked by
+    # WinVerifyTrust, so the trim is safe. No binary is modified with this step.
+    mkdir -p $out/Microsoft.VC90.MFC
+    cp $out/mfc90u.dll $out/Microsoft.VC90.MFC/
+    sed 's|<file name="mfc90.dll" /> <file name="mfc90u.dll" /> <file name="mfcm90.dll" /> <file name="mfcm90u.dll" />|<file name="mfc90u.dll" />|' \
+      $out/Microsoft.VC90.MFC.manifest > $out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest
   '';
 
   doInstallCheck = true;
@@ -89,6 +104,19 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -n '/^\[Platform_Check\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
     sed -n '/^\[Log_file\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=1"
     grep -q "^RETURN_SUCCESSFUL=0,0" "$out/platform.ini"
+    # VC90 MFC private-assembly layout (see install phase): the directory must exist
+    # next to H2OFFT-W.exe, the manifest must keep the exact requested identity (name
+    # + version + token), list only the shipped file, and the DLL must be byte-identical
+    # to the vendor flat copy (signature validity guarantee).
+    [ -s "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest" ]
+    [ -s "$out/Microsoft.VC90.MFC/mfc90u.dll" ]
+    cmp "$out/mfc90u.dll" "$out/Microsoft.VC90.MFC/mfc90u.dll"
+    grep -qF 'name="Microsoft.VC90.MFC"' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
+    grep -qF 'version="9.0.21022.8"' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"
+    if grep -E 'file name="mfc90\.dll"|file name="mfcm' "$out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest"; then
+      echo "ERROR: VC90 MFC private manifest lists files the toolchain does not ship" >&2
+      exit 1
+    fi
     for f in "$out"/*.exe "$out"/*.dll; do
       # The strip step is gone (see install phase): the vendor toolchain must stay
       # byte-identical or H2OFFT-W's integrity verification rejects it. Assert the

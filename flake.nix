@@ -574,7 +574,14 @@
                   mmd -i disk.img@@1048576 ::/firmware
                   mmd -i disk.img@@1048576 ::/firmware/GKCN65WW
                   for f in ${diskoEval.config.hardware.winpe.payloads.lenovo-bios.package}/*; do
-                    mcopy -o -i disk.img@@1048576 "$f" ::/firmware/GKCN65WW/$(basename "$f")
+                    if [ -d "$f" ]; then
+                      # -s: recursive - the payload tree contains the Microsoft.VC90.MFC
+                      # private assembly directory that must land NEXT to H2OFFT-W.exe
+                      # (stage-files uses cp -r on real hardware; kernel of the same check).
+                      mcopy -s -o -i disk.img@@1048576 "$f" ::/firmware/GKCN65WW/
+                    else
+                      mcopy -o -i disk.img@@1048576 "$f" ::/firmware/GKCN65WW/$(basename "$f")
+                    fi
                   done
 
                   # 5. Boot QEMU with OVMF UEFI firmware under TCG emulation.
@@ -629,6 +636,8 @@
                       # Breadcrumbs prove WHICH mount path fired (label lookup vs hardcoded fallback) - load-bearing for real hardware.
                       echo "--- guest startnet.log breadcrumbs ---"
                       mtype -i disk.img@@1048576 ::/startnet.log 2>/dev/null || echo "(no startnet.log on ESP)"
+                      echo "--- flasher exit code ---"
+                      grep "Flasher exit code" autorun_result.log || echo "(no Flasher exit code line in autorun.log)"
                       break
                     fi
                     dump_diag "$attempt"
@@ -650,6 +659,17 @@
                   # flashfail marker covers both outcomes; under QEMU the tool finds no
                   # flashable device, exits nonzero, and the autorun logs the fail branch).
                   grep "Flasher process failed\|Flash staging completed" autorun_result.log
+
+                  # Regression tripwire: 0xC0000135 (-1073741515 decimal) is the
+                  # STATUS_DLL_NOT_FOUND the loader returns when an actctx-bound exe
+                  # fails at process creation - the exact hardware failure of rounds
+                  # 13-19 (VC90 SxS, see RESEARCH-NOTES.md"). If H2OFFT-W returns it
+                  # again here, the graft chains regressed and the check must be red
+                  # BEFORE a user reboot is ever requested.
+                  if grep -q "Flasher exit code: -1073741515" autorun_result.log; then
+                    echo "ERROR: H2OFFT-W died at process creation (0xC0000135) - the VC90/WOW64 graft chain regressed"
+                    exit 1
+                  fi
 
                   touch $out
                 '';

@@ -21,9 +21,17 @@ let
   # WinRE (build-consistent kernel + user mode, native PE infra), and these assembly
   # families provide the 32-bit runtime Microsoft ships for every desktop system:
   # SxS runtime assemblies (WinSxS manifests + payloads) and WOW64 subsystem files.
-  sxsFamilyRegex = "(systemcompatible|isolationautomation|i\\.\\.utomation\\.proxystub|common-controls|gdiplus)";
+  # The vc90.crt family is here for the same reason as the windows.* families below:
+  # H2OFFT-W.exe (RESEARCH-NOTES.md round 19) dies at 0xC0000135 with the
+  # side-by-side-configuration dialog because its embedded manifest requests
+  # Microsoft.VC90.CRT 9.0.21022.8 and this WinRE base ships no VC90 at all. The
+  # ESD carries the 9.0.30729.9635 CRT assembly + a policy.9.0 publisher-policy
+  # manifest whose Winners entries bind any 9.0.x request to 30729.9635.
+  sxsFamilyRegex = "(systemcompatible|isolationautomation|i\\.\\.utomation\\.proxystub|common-controls|gdiplus|microsoft\\.vc90\\.crt|policy\\.9\\.0\\.microsoft\\.vc90\\.crt)";
   coreWow64Files = [
     "advapi32.dll"
+    "comdlg32.dll"
+    "dwmapi.dll"
     "gdi32.dll"
     "kernel32.dll"
     "KernelBase.dll"
@@ -34,6 +42,8 @@ let
     "shell32.dll"
     "shlwapi.dll"
     "user32.dll"
+    "uxtheme.dll"
+    "winmm.dll"
     "wldp.dll"
     "cmd.exe"
   ];
@@ -150,6 +160,25 @@ stdenvNoCC.mkDerivation {
       echo "add $f $rel"
     done >> "$TMP/graft.cmds"
 
+    # Graft 2b: the x86 VC90 CRT SxS assembly (9.0.30729.9635: 3 payload DLLs + own
+    # manifest) plus its policy.9.0 publisher-policy manifest (see sxsFamilyRegex note:
+    # H2OFFT-W requests 9.0.21022.8; the policy + Winners redirect it to 30729.9635).
+    echo "Extracting x86 VC90 CRT SxS assembly from ESD image $OS_IMAGE..."
+    7z x -y -o"$TMP/osimg" "$src" \
+      "$OS_IMAGE/Windows/WinSxS/Manifests/x86_microsoft.vc90.crt_*" \
+      "$OS_IMAGE/Windows/WinSxS/Manifests/x86_policy.9.0.microsoft.vc90.crt_*" \
+      "$OS_IMAGE/Windows/WinSxS/x86_microsoft.vc90.crt_*" \
+      >/dev/null
+    VC90_COUNT=$(find "$OSI/Windows/WinSxS/Manifests" -name "x86_microsoft.vc90.crt_*.manifest" 2>/dev/null | wc -l)
+    [ "$VC90_COUNT" -ge 1 ] || { echo "ERROR: expected the x86 VC90 CRT SxS manifests in ESD image $OS_IMAGE, found $VC90_COUNT" >&2; exit 1; }
+    find "$OSI/Windows/WinSxS/Manifests" -name "x86_microsoft.vc90.crt_*.manifest" -o -name "x86_policy.9.0.microsoft.vc90.crt_*.manifest" | while read -r f; do
+      echo "add $f /Windows/WinSxS/Manifests/$(basename "$f")"
+    done >> "$TMP/graft.cmds"
+    find "$OSI/Windows/WinSxS" -maxdepth 2 -type f ! -path "*/Manifests/*" -path "*/x86_microsoft.vc90.crt_*" | while read -r f; do
+      rel="''${f#"$OSI"}"
+      echo "add $f $rel"
+    done >> "$TMP/graft.cmds"
+
     # Graft 3: the SxS Winners registry entries, generated from the same ESD's SOFTWARE hive
     # (the SxS binder resolves system assemblies through this registry index, not the
     # directory scan). Emitted as explicit `reg add` commands in a generated batch file that
@@ -159,7 +188,7 @@ stdenvNoCC.mkDerivation {
     hivexregedit --export "$TMP/hive/SOFTWARE" '\Microsoft\Windows\CurrentVersion\SideBySide\Winners' > "$TMP/winners-all.reg" 2>/dev/null
     [ -s "$TMP/winners-all.reg" ] || { echo "ERROR: could not export SxS Winners from ESD image $OS_IMAGE SOFTWARE hive" >&2; exit 1; }
     awk '
-      /^\[\\Microsoft\\Windows\\CurrentVersion\\SideBySide\\Winners\\x86_microsoft\.windows\.(systemcompatible|isolationautomation|i\.\.utomation\.proxystub|common-controls|gdiplus)_/ {
+      /^\[\\Microsoft\\Windows\\CurrentVersion\\SideBySide\\Winners\\x86_(microsoft\.windows\.(systemcompatible|isolationautomation|i\.\.utomation\.proxystub|common-controls|gdiplus)|microsoft\.vc90\.crt|policy\.9\.0\.microsoft\.vc90\.crt)_/ {
         inkeep = 1
         key = $0
         gsub(/^\[/, "", key); gsub(/\]$/, "", key)
@@ -326,6 +355,18 @@ stdenvNoCC.mkDerivation {
       || { echo "ERROR: sxs-winners.cmd lacks x86 SystemCompatible Winners reg add entries" >&2; exit 1; }
     grep -qF 'reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\SideBySide\Winners\x86_microsoft.windows.i..utomation.proxystub' regchk/sxs-winners.cmd \
       || { echo "ERROR: sxs-winners.cmd lacks x86 ProxyStub Winners reg add entries" >&2; exit 1; }
+    grep -qF 'reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\SideBySide\Winners\x86_microsoft.vc90.crt' regchk/sxs-winners.cmd \
+      || { echo "ERROR: sxs-winners.cmd lacks x86 VC90 CRT Winners reg add entries" >&2; exit 1; }
+    grep -qF 'reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\SideBySide\Winners\x86_policy.9.0.microsoft.vc90.crt' regchk/sxs-winners.cmd \
+      || { echo "ERROR: sxs-winners.cmd lacks the x86 VC90 CRT publisher-policy Winners reg add entries" >&2; exit 1; }
+    # The VC90 CRT assembly itself must be in the WinSxS store of the boot.wim (manifest
+    # + at least one payload), otherwise H2OFFT-W dies at actctx (RESEARCH-NOTES.md round 19).
+    wimlib-imagex dir "$out/sources/boot.wim" | grep -iE "WinSxS/Manifests/x86_microsoft\.vc90\.crt" \
+      || { echo "ERROR: boot.wim is missing the x86 VC90 CRT SxS manifest" >&2; exit 1; }
+    wimlib-imagex dir "$out/sources/boot.wim" | grep -iE "WinSxS/Manifests/x86_policy\.9\.0\.microsoft\.vc90\.crt" \
+      || { echo "ERROR: boot.wim is missing the x86 VC90 CRT publisher-policy manifest" >&2; exit 1; }
+    wimlib-imagex dir "$out/sources/boot.wim" | grep -iE "WinSxS/x86_microsoft\.vc90\.crt.*/msvcr90\.dll" \
+      || { echo "ERROR: boot.wim is missing the x86 VC90 CRT payload (msvcr90.dll)" >&2; exit 1; }
 
     runHook postInstallCheck
   '';
