@@ -125,7 +125,7 @@ Real-hardware expectation: `san policy=onlineall` brings the NVMe online,
 
 **ROUND-10 RESOLUTION (unexplained but moot): the NEXT boot (round 11) ran our flow cleanly with the same image — see §0.8.**
 
-## 0.8 ROUNDS 11–18 (2026-09-17 → 09-18) — SXS WON ON HARDWARE; WRONG TOOL DIAGNOSED; INSYDE ENTRY POINT; H2OFFT INTEGRITY CHECK STRIP-CONFLICT SOLVED; LOADER-DLL GAP FOUND — READ FIRST
+## 0.8 ROUNDS 11–19 (2026-09-17 → 09-19) — SXS WON ON HARDWARE; WRONG TOOL DIAGNOSED; INSYDE ENTRY POINT; INTEGRITY-CHECK STRIP-CONFLICT SOLVED; LOADER-DLL GAP FIXED; **ROUND 19 = VC90 ACTCTX WALL NAMED BY LOCAL QEMU REPLICA** — READ FIRST
 
 **User contract (standing): minimal unofficial modification, official binaries/tools only; scripts must not break (or fail with named errors); everything checkable; no tag without explicit user approval. User constraint (round 15+): typing inside WinPE is impractical (azerty keyboard vs qwerty expectation) — NEVER design a round that requires typing in the guest; rely on photos + automatic logs. User frustration is real: keep hardware rounds count minimal, do local replication first.**
 
@@ -158,9 +158,31 @@ Real-hardware expectation: `san policy=onlineall` brings the NVMe online,
 - (d) The bios package's H2OFFT.cat (43 authenticode hashes, MS Windows Hardware Compatibility Publisher chain) is NOT the mechanism for the verify we hit — H2OFFT verifies per-file embedded signatures, not catalog membership (wine dump_file_info vs FILE_INFO selection confirmed).
 
 **NEXT STEPS (in order):**
-1. Commit the SysWOW64 loader-graft fix (currently uncommitted in working tree), push, dotfiles bump, user switch → reboot → round 17 = the real flash verdict. If the exit code lands 259/3010 and H2OFFT.log/payload.out have content → the toolchain integrity + loader chains are BOTH past; the remaining wall is the actual flash path (drivers/IHISI).
-2. If round 17 fails with a named error: fix per evidence (WDF/service environment, or alternate [ForceFlash]/user-flags route), never offline hives.
+1. ~~Commit the SysWOW64 loader-graft fix~~ DONE: committed+pushed as **10b4e1d** (doc + graft in one commit); dotfiles bumped to **e9b144e** → 10b4e1d.
+2. Hardware rounds 17–19 executed with 10b4e1d → **ALL returned 0xC0000135 again** — see §0.8-tail (ROUNDS 17–19 + THE VC90 WALL) for the full round-19 story including the load-bearing LOCAL replica evidence.
 3. Keep the round-14 user constraint: no WinPE-typing rounds, ever.
+
+**ROUND 19 ARTIFACTS (2026-09-19 nightly, local replica run = CRITICAL for the NEXT fix):**
+- `.debug/hwreplica/boot-n18.wim` = the ROUND-19 REPLICA IMAGE = the built 10b4e1d winpe-image (h2s4q951q6mz9lki42bspk8m73vsasl2) + manually-injected winpeshl.ini/startnet.cmd (same wimupdate commands the arm uses: `/nix/store/ysb28fy2np6ga90y1pr2kcanmcwkr3zi-winpeshl.ini`, `/nix/store/g26gsf9xiypy28xs0chxq93xbhvw4b1c-startnet.cmd` = the winpe-flash passthru paths, re-derive via `nix eval --raw .#packages.x86_64-linux.winpe-flash.{winpeshlIni,startnetScript}`). Boot-n18.wim size differs from partition's 597,590,130 only by the arm's metadata churn; BOTH contain identical graft sets.
+- `.debug/hwreplica/latest-boot.jpg` + `r19-t24.ppm` = the replica boot's screendump at the failure moment. THE MONEY TEXT (visible on screen): **"The application has failed to start because its side-by-side configuration is incorrect. Please see the application event log or use the command-line sxstrace.exe tool for more detail."** — H2OFFT-W.exe fails at ACTIVATION-CONTEXT creation (the rounds 4/5-era CLASS), not at an import: 0xC0000135 and the SxS text are the same refusal (loader reports the actctx init failure of a manifest-bearing exe as STATUS_DLL_NOT_FOUND on this 26100 build; the round-4/5 hardware class showed the text, the round-13+ logs show the NTSTATUS).
+- The replica booted with the OLD diag autorun (`.debug/hwreplica/autorun.cmd` = the autorun-diag sxstrace variant, default of stage-replica.sh when AUTORUN_FILE is unset) — payload staged = the 10b4e1d bios package. The failure message in the dump is the payload's own CreateProcess-time actctx refusal.
+- QEMU run recipe for this replica validated again (it self-rebooted; serial + screendumps). stage-replica.sh needs `WIM_FILE=$PWD/.debug/hwreplica/boot-n18.wim bash .debug/hwreplica/stage-replica.sh`.
+
+**ROUND 19 ROOT CAUSE = THE VC90 ACTCTX WALL (THE NAME, CONFIRMED):** H2OFFT-W.exe's embedded manifest requests **Microsoft.VC90.CRT and Microsoft.VC90.MFC revision 9.0.21022.8** (rounds 4/5 wrestool data). The WinRE-based environment ships ZERO VC90 assemblies. The ESD (image 4) carries ONLY `x86_microsoft.vc90.crt_1fc8b3b9a1e18e3b_9.0.30729.9635_none_508ff82ebcbafee0` (manifest + payload msvcm90.dll/msvcp90.dll/msvcr90.dll) and **NO x86 VC90 MFC assembly at all** (verified: 0 `x86_microsoft.vc90` MFC entries in image-4's WinSxS listing). Note also: the flat msvcr90.dll/msvcp90.dll/mfc90u.dll shipped next to H2OFFT-W.exe (vendor flat layout) do NOT satisfy an actctx that requests VC90 assemblies by identity — assembly binding needs the WinSxS store.
+
+**THE FIX PLAN FOR ROUND 20 (NOT YET IMPLEMENTED, NEXT SESSION'S FIRST WORK):**
+1. Extend `winpe-image` grafts: extract + graft the official ESD `x86_microsoft.vc90.crt_..._9.0.30729.9635` SxS assembly (manifest + 3 payloads, 7z paths case-sensitive like KernelBase).
+2. Extend the build-time-generated sxs-winners.cmd with VC90 CRT Winners `reg add` lines (grabs the 9.0.21022.8-class request and binds to the 30729 store entry; the binder's winners index + publisher-policy semantics are the same registry-driven mechanism already proven with the 6595 family — the 6595 winners reg adds are in the SAME generated file, so the code path exists; extend the awk filter family with `vc90`).
+3. The MFC dependency: ESD has NO vc90 MFC assembly. Fallback = the vendor-flat private assembly route (rounds 4/5): `Microsoft.VC90.MFC\` subdir with the trimmed manifest + mfc90u.dll next to H2OFFT-W.exe. CAUTION from 4a8b9c4 touching these: modifying vendor FILES breaks H2OFFT's WinVerifyTrust pass (round 15); the private-assembly route adds SUBDIRECTORIES (does not touch the exe/dll hashes) — manifest files themselves are not signature-checked (they ship in the vendor SFX already as separate .manifest files). VERIFY this locally in QEMU before any user reboot: the gate = the flasher BANNER (not the SxS line) in `autorun_result.log`.
+4. THE NEW VALIDATION GATE (binding): a user reboot is only requested AFTER a local QEMU replica run shows H2OFFT-W passing actctx (i.e., NOT the SxS text; either the tool's banner/insyde-serif output or a NEW named failure). NO more diagnostic-only user rounds. The local replica = stage-replica.sh with the CURRENT winpe-image + CURRENT autorun from the eval.
+5. Also fix in the same pass: the winpe-qemu check's breadcrumb dump misses the `Flasher exit code:` line (the check's startnet.log tail truncates before it) — so QEMU RC data is invisible in check logs; add the autorun_result.log dump to the check diag.
+
+**User wishes logged this session (rounds 14→19):**
+- Reboot cycles are extremely costly to the user; NEVER trade a user boot for a diagnostic. Every future failure class must be diagnosable locally first (wine or QEMU replica) before proposing a user reboot.
+- "The error trace should be exhaustive" — when asking for a round, ensure the auto-collected evidence (RC line, payload.out, H2OFFT.log, startnet.log, screendumps) is complete BY DEFAULT, not discovered missing after a boot.
+- No typing in WinPE ever (azerty/qwerty mistake risk) — photos only.
+- The user's windows-like GUI dialogs from wine runs (the Insyde "cannot load driver", the malware alert) are EXPECTED wine artifacts, not hardware-relevant.
+- The user tolerates long local waits but not repeated reboots. Vecchin/QEMU local gating is the process standard now.
 
 **VALIDATION CHAIN (all green): replica ladder on boot-b3/b4/b5: T32 probes RC=42; FWUpdLcl.exe -F BIOS.fd -Y prints banner + usage + "Error 8743: Unknown or Unsupported Platform" (expected under QEMU — no Intel ME; the real Legion passes this check); the flake's winpe-qemu check boots the BUILT image with the REAL lenovo-legion-bios payload and asserts FWUpdLcl's banner + the flashfail branch completes. `nix flake check -L` exit 0 (2026-09-15 ~23:50).**
 
