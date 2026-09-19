@@ -13,6 +13,11 @@
   gnugrep,
   python3,
   icoutils,
+  # x86 helper DLLs staged next to H2OFFT-W (winpe-image's wow64SidecarFiles):
+  # the WinRE image boot is broken when these are grafted wholesale into its
+  # SysWOW64, so they ride along next to the flasher instead (loader resolves
+  # the application directory first). Default empty for the plain package.
+  sidecarFiles ? { },
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "lenovo-legion-15ach6h-bios";
@@ -82,6 +87,25 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp $out/mfc90u.dll $out/Microsoft.VC90.MFC/
     sed 's|<file name="mfc90.dll" /> <file name="mfc90u.dll" /> <file name="mfcm90.dll" /> <file name="mfcm90u.dll" />|<file name="mfc90u.dll" />|' \
       $out/Microsoft.VC90.MFC.manifest > $out/Microsoft.VC90.MFC/Microsoft.VC90.MFC.manifest
+
+    # VC90 CRT private assembly, same private-assembly route as MFC: the vendor
+    # ships Microsoft.VC90.CRT.manifest + msvcp90.dll/msvcr90.dll flat right next
+    # to H2OFFT-W.exe; the manifest lists three payload files of which msvcm90.dll
+    # is absent from this toolchain, so the private manifest is trimmed to the
+    # shipped pair. All bytes vendor-identical, manifest is text-only.
+    mkdir -p $out/Microsoft.VC90.CRT
+    cp $out/msvcp90.dll $out/Microsoft.VC90.CRT/
+    cp $out/msvcr90.dll $out/Microsoft.VC90.CRT/
+    sed 's|<file name="msvcr90.dll" /> <file name="msvcp90.dll" /> <file name="msvcm90.dll" />|<file name="msvcp90.dll" /> <file name="msvcr90.dll" />|' \
+      $out/Microsoft.VC90.CRT.manifest > $out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest
+
+    # Sidecar x86 DLLs (see sidecarFiles parameter note): copied verbatim next to
+    # H2OFFT-W.exe. Bytes are vendor-OS-identical Microsoft files from the same ESD.
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (name: path: ''
+        cp ${path} $out/${name}
+      '') sidecarFiles
+    )}
   '';
 
   doInstallCheck = true;
@@ -104,7 +128,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -n '/^\[Platform_Check\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=0"
     sed -n '/^\[Log_file\]/,/^\[/p' "$out/platform.ini" | grep -q "^Flag=1"
     grep -q "^RETURN_SUCCESSFUL=0,0" "$out/platform.ini"
-    # VC90 MFC private-assembly layout (see install phase): the directory must exist
+    # VC90 MFC private assembly layout: the directory must exist
     # next to H2OFFT-W.exe, the manifest must keep the exact requested identity (name
     # + version + token), list only the shipped file, and the DLL must be byte-identical
     # to the vendor flat copy (signature validity guarantee).
@@ -117,6 +141,18 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       echo "ERROR: VC90 MFC private manifest lists files the toolchain does not ship" >&2
       exit 1
     fi
+    # VC90 CRT private assembly checks (same private-assembly discipline as MFC).
+    [ -s "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest" ]
+    grep -qF 'name="Microsoft.VC90.CRT"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    grep -qF 'version="9.0.21022.8"' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    grep -qF '<file name="msvcp90.dll" />' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    grep -qF '<file name="msvcr90.dll" />' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"
+    if grep -E 'file name="msvcm' "$out/Microsoft.VC90.CRT/Microsoft.VC90.CRT.manifest"; then
+      echo "ERROR: VC90 CRT private manifest lists msvcm90.dll which the toolchain lacks" >&2
+      exit 1
+    fi
+    cmp "$out/msvsp90.dll" "$out/Microsoft.VC90.CRT/msvcp90.dll" 2>/dev/null || cmp "$out/msvcp90.dll" "$out/Microsoft.VC90.CRT/msvcp90.dll"
+    cmp "$out/msvcr90.dll" "$out/Microsoft.VC90.CRT/msvcr90.dll"
     for f in "$out"/*.exe "$out"/*.dll; do
       # The strip step is gone (see install phase): the vendor toolchain must stay
       # byte-identical or H2OFFT-W's integrity verification rejects it. Assert the

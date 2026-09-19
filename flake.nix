@@ -524,7 +524,16 @@
                       # drivers and reports a flash-device failure/no-match outcome
                       # after initializing - which is the completion signal below.
                       payloads.lenovo-bios = {
-                        package = pkgs.callPackage ./pkgs/lenovo-legion-bios { };
+                        package = (
+                          pkgs.callPackage ./pkgs/lenovo-legion-bios {
+                            sidecarFiles = lib.listToAttrs (
+                              map (name: {
+                                inherit name;
+                                value = "${winpeImg}/sidecar/${name}";
+                              }) winpeImg.wow64SidecarFiles
+                            );
+                          }
+                        );
                         targetFileName = "GKCN65WW";
                         entryPoint = "H2OFFT-W.exe";
                         silentFlags = [ ];

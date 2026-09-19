@@ -4,7 +4,19 @@
   ...
 }:
 let
-  biosPackage = pkgs.callPackage ../pkgs/lenovo-legion-bios { };
+  winpeImage = pkgs.callPackage ../pkgs/winpe-image { };
+  biosPackage = pkgs.callPackage ../pkgs/lenovo-legion-bios {
+    # x86 DLLs the Insyde flasher resolves straight from its own directory
+    # (grafting them into the boot.wim's SysWOW64 instead breaks the WinPE boot,
+    # see RESEARCH-NOTES.md round 21). winpe-image extracts them from the same
+    # ESD and exposes them via its wow64SidecarFiles passthru.
+    sidecarFiles = lib.listToAttrs (
+      map (name: {
+        inherit name;
+        value = "${winpeImage}/sidecar/${name}";
+      }) winpeImage.wow64SidecarFiles
+    );
+  };
 in
 {
   imports = [

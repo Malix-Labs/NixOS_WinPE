@@ -28,10 +28,19 @@ let
   # ESD carries the 9.0.30729.9635 CRT assembly + a policy.9.0 publisher-policy
   # manifest whose Winners entries bind any 9.0.x request to 30729.9635.
   sxsFamilyRegex = "(systemcompatible|isolationautomation|i\\.\\.utomation\\.proxystub|common-controls|gdiplus|microsoft\\.vc90\\.crt|policy\\.9\\.0\\.microsoft\\.vc90\\.crt)";
-  coreWow64Files = [
-    "advapi32.dll"
+  # Extra x86 DLLs the Insyde flasher needs but which must NOT be grafted into the
+  # WinRE image itself (grafting dwmapi/winmm/uxtheme/comdlg32 into the boot.wim's
+  # SysWOW64 breaks the WinPE boot outright - BSOD 0xc0000021a during early boot,
+  # validated 2026-09-19). They ship as sidecar files staged NEXT to the 32-bit
+  # flasher, where the loader resolves them before the system directories.
+  wow64SidecarFiles = [
     "comdlg32.dll"
     "dwmapi.dll"
+    "uxtheme.dll"
+    "winmm.dll"
+  ];
+  coreWow64Files = [
+    "advapi32.dll"
     "gdi32.dll"
     "kernel32.dll"
     "KernelBase.dll"
@@ -42,8 +51,6 @@ let
     "shell32.dll"
     "shlwapi.dll"
     "user32.dll"
-    "uxtheme.dll"
-    "winmm.dll"
     "wldp.dll"
     "cmd.exe"
   ];
@@ -179,6 +186,25 @@ stdenvNoCC.mkDerivation {
       echo "add $f $rel"
     done >> "$TMP/graft.cmds"
 
+    # Graft 2c: extract the x86 sidecar DLLs NEVER to be grafted into the image but
+    # exported alongside it (see wow64SidecarFiles note: booting a boot.wim whose
+    # SysWOW64 contains them bugchecks). The bios payload stages them next to
+    # H2OFFT-W.exe instead; the 32-bit loader checks the application directory first.
+    # 7z is case-sensitive for payload names (round-18 KernelBase lesson).
+    echo "Extracting x86 sidecar DLLs from ESD image $OS_IMAGE..."
+    SIDEZIP_ARGS=()
+    for f in ${lib.concatStringsSep " " wow64SidecarFiles}; do
+      SIDEZIP_ARGS+=("$OS_IMAGE/Windows/SysWOW64/$f")
+    done
+    7z x -y -o"$TMP/sidecar" "$src" "''${SIDEZIP_ARGS[@]}" >/dev/null
+    for f in ${lib.concatStringsSep " " wow64SidecarFiles}; do
+      [ -s "$TMP/sidecar/$OS_IMAGE/Windows/SysWOW64/$f" ] || { echo "ERROR: ESD image $OS_IMAGE lost SysWOW64/$f (x86 sidecar)" >&2; exit 1; }
+    done
+    mkdir -p "$out/sidecar"
+    for f in ${lib.concatStringsSep " " wow64SidecarFiles}; do
+      cp "$TMP/sidecar/$OS_IMAGE/Windows/SysWOW64/$f" "$out/sidecar/$f"
+    done
+
     # Graft 3: the SxS Winners registry entries, generated from the same ESD's SOFTWARE hive
     # (the SxS binder resolves system assemblies through this registry index, not the
     # directory scan). Emitted as explicit `reg add` commands in a generated batch file that
@@ -232,6 +258,10 @@ stdenvNoCC.mkDerivation {
   # Update flow: fetch the Windows Update product catalog, locate the current client ESD, prefetch + structurally validate it, then rewrite this file.
   # Every predictable failure (catalog layout, edition rename, missing boot files) exits with a named error BEFORE default.nix is touched.
   # Structural changes that no script can predict (new distribution mechanism, image reorganization) fail loudly here and need a human-authored fix.
+  # x86 helper DLLs staged next to 32-bit flashers by the bios package (see
+  # wow64SidecarFiles note & graft 2c: these must NOT live in the boot.wim).
+  passthru.wow64SidecarFiles = wow64SidecarFiles;
+
   passthru.updateScript = writeShellApplication {
     name = "update-winpe-image";
     runtimeInputs = [
@@ -324,6 +354,10 @@ stdenvNoCC.mkDerivation {
     [ -s "$out/EFI/Boot/bootx64.efi" ]
     [ -s "$out/EFI/Microsoft/boot/bcd" ]
     [ -s "$out/boot/boot.sdi" ]
+    # The x86 sidecar DLLs must exist (bios package stages them next to H2OFFT-W).
+    for f in ${lib.concatStringsSep " " wow64SidecarFiles}; do
+      [ -s "$out/sidecar/$f" ] || { echo "ERROR: sidecar DLL missing: $out/sidecar/$f" >&2; exit 1; }
+    done
     [ -s "$out/EFI/Microsoft/boot/resources/bootres.dll" ]
     [ -s "$out/EFI/Microsoft/boot/fonts/wgl4_boot.ttf" ]
 
