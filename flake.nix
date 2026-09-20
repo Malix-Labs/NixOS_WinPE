@@ -295,11 +295,12 @@
                   wine cmd.exe /c "C:\winpe\autorun.cmd" || true
                   grep -q "Flasher process failed" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
-                  # Test Case 3: Non-Interactive mode - Mock executable fails (exit code 3) -> reboots immediately
+                  # Test Case 3: Non-Interactive mode - Mock executable fails (exit code 3)
+                  # -> the HUMAN PAUSE screens up first, and pressing ENTER reboots.
                   install_mock_autorun ${autorunNonInteractive}
 
-                  wine cmd.exe /c "C:\winpe\autorun.cmd" || true
-                  grep -q "Non-interactive mode active: rebooting" "$WINEPREFIX/drive_c/winpe/autorun.log"
+                  wine cmd.exe /c "C:\winpe\autorun.cmd" </dev/null || true
+                  grep -q "HUMAN PAUSE" "$WINEPREFIX/drive_c/winpe/autorun.log"
 
                   # Test Case 4: Real Windows GUI PE Binary (PE32/PE32+ GUI Subsystem) - also exercises the payload console-output capture into autorun.log.
                   printf '@echo off\r\necho Mock GUI executed\r\nexit /b 0\r\n' > "$WINEPREFIX/drive_c/winpe/firmware/mock.bat"
