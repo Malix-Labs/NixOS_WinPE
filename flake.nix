@@ -617,10 +617,10 @@
                     cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
                     chmod +w VARS.fd
                     # Screendumps every 20s: the guest console is the only window into pre-startnet failures (bootmgr/winload have no logs).
-                    ( for t in $(seq 1 60); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
+                    ( for t in $(seq 1 120); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
                     WATCHDOG=$!
                     # Timeout 1200: WinRE-based boot.wim (~595MB) extracts slower under TCG than the old setup-PE image did.
-                    timeout 1200 qemu-system-x86_64 \
+                    timeout 2400 qemu-system-x86_64 \
                       -machine q35 \
                       -m 4096 \
                       -smp 1 \

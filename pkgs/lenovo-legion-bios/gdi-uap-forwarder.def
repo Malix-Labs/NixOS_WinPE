@@ -1,0 +1,23 @@
+; Forwarder shim providing the api-ms-win-gdi-internal-uap-l1-1-0.dll API set that
+; the 26100 WinRE-based boot.wim / x86 WOW64 loader cannot resolve (RESEARCH-NOTES.md
+; round 22: no stub file and no schema entry anywhere in the ESD). Every symbol is
+; forwarded verbatim to the ESD's own x86 gdi32full.dll, exactly how Microsoft's own
+; api-ms-* files work. Does not touch any vendor byte.
+LIBRARY "api-ms-win-gdi-internal-uap-l1-1-0"
+EXPORTS
+	hdcCreateDCW=gdi32full.hdcCreateDCW
+	InternalDeleteDC=gdi32full.InternalDeleteDC
+	GetRandomRgn=gdi32full.GetRandomRgn
+	PtInRegion=gdi32full.PtInRegion
+	FillRgn=gdi32full.FillRgn
+	CreateRoundRectRgn=gdi32full.CreateRoundRectRgn
+	SelectObjectImpl=gdi32full.SelectObjectImpl
+	SetPolyFillModeImpl=gdi32full.SetPolyFillModeImpl
+	SelectClipRgnImpl=gdi32full.SelectClipRgnImpl
+	AbortDocImpl=gdi32full.AbortDocImpl
+	GdiSupportsFontChangeEvent=gdi32full.GdiSupportsFontChangeEvent
+	DeleteColorSpace=gdi32full.DeleteColorSpace
+	IcmReleaseCachedColorSpace=gdi32full.IcmReleaseCachedColorSpace
+	IcmDeleteLocalDC=gdi32full.IcmDeleteLocalDC
+	DeleteEMFSpoolData=gdi32full.DeleteEMFSpoolData
+	SetMetaRgn=gdi32full.SetMetaRgn

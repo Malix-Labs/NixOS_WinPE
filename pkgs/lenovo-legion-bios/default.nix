@@ -1,5 +1,6 @@
 {
   lib,
+  pkgs,
   stdenvNoCC,
   fetchurl,
   innoextract,
@@ -18,6 +19,12 @@
   # SysWOW64, so they ride along next to the flasher instead (loader resolves
   # the application directory first). Default empty for the plain package.
   sidecarFiles ? { },
+  # mingw cross toolchain, used only for the GDI UAP api-set forwarder shim
+  # (the ONLY non-vendor binary in this deployment): gdi32.dll imports
+  # api-ms-win-gdi-internal-uap-l1-1-0.dll which exists neither as a file nor
+  # as a resolvable schema entry in the 26100 ESD (round 22). Every export is
+  # forwarded verbatim to the ESD's own x86 gdi32full.dll.
+  gcc-mingw ? pkgs.pkgsCross.mingw32.stdenv.cc,
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "lenovo-legion-15ach6h-bios";
@@ -34,6 +41,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     p7zip
     gnused
     (python3.withPackages (ps: [ ps.pefile ]))
+    # For the GDI UAP api-set forwarder shim below.
+    gcc-mingw
   ];
 
   unpackPhase = ''
@@ -106,6 +115,12 @@ stdenvNoCC.mkDerivation (finalAttrs: {
         cp ${path} $out/${name}
       '') sidecarFiles
     )}
+
+    # api-ms-win-gdi-internal-uap-l1-1-0.dll forwarder shim (see gcc-mingw parameter
+    # note): a 16-forwarder DLL compiled here at build time; exports forward verbatim
+    # to the ESD's own x86 gdi32full.dll. Staged next to H2OFFT-W.exe.
+    ${gcc-mingw}/bin/i686-w64-mingw32-gcc -shared -o $out/api-ms-win-gdi-internal-uap-l1-1-0.dll \
+      ${./gdi-uap-forwarder.c} ${./gdi-uap-forwarder.def}
   '';
 
   doInstallCheck = true;
@@ -151,8 +166,15 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       echo "ERROR: VC90 CRT private manifest lists msvcm90.dll which the toolchain lacks" >&2
       exit 1
     fi
-    cmp "$out/msvsp90.dll" "$out/Microsoft.VC90.CRT/msvcp90.dll" 2>/dev/null || cmp "$out/msvcp90.dll" "$out/Microsoft.VC90.CRT/msvcp90.dll"
+    cmp "$out/msvcp90.dll" "$out/Microsoft.VC90.CRT/msvcp90.dll"
     cmp "$out/msvcr90.dll" "$out/Microsoft.VC90.CRT/msvcr90.dll"
+    # GDI UAP forwarder shim must exist, be a 32-bit DLL per binary, and forward
+    # exactly the 16 symbols gdi32 imports from that api set.
+    [ -s "$out/api-ms-win-gdi-internal-uap-l1-1-0.dll" ]
+    file -b "$out/api-ms-win-gdi-internal-uap-l1-1-0.dll" | grep -q "PE32"
+    for s in hdcCreateDCW InternalDeleteDC GetRandomRgn PtInRegion FillRgn CreateRoundRectRgn SelectObjectImpl SetPolyFillModeImpl SelectClipRgnImpl AbortDocImpl GdiSupportsFontChangeEvent DeleteColorSpace IcmReleaseCachedColorSpace IcmDeleteLocalDC DeleteEMFSpoolData SetMetaRgn; do
+      grep -aqF "gdi32full.$s" "$out/api-ms-win-gdi-internal-uap-l1-1-0.dll" || { echo "ERROR: forwarder missing gdi32full.$s" >&2; exit 1; }
+    done
     for f in "$out"/*.exe "$out"/*.dll; do
       # The strip step is gone (see install phase): the vendor toolchain must stay
       # byte-identical or H2OFFT-W's integrity verification rejects it. Assert the

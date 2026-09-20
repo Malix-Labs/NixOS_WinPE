@@ -36,6 +36,7 @@ let
   wow64SidecarFiles = [
     "comdlg32.dll"
     "dwmapi.dll"
+    "gdi32full.dll"
     "uxtheme.dll"
     "winmm.dll"
   ];
@@ -204,6 +205,23 @@ stdenvNoCC.mkDerivation {
     for f in ${lib.concatStringsSep " " wow64SidecarFiles}; do
       cp "$TMP/sidecar/$OS_IMAGE/Windows/SysWOW64/$f" "$out/sidecar/$f"
     done
+
+    # Graft 2d: the x86 api-set stub files + gdi32full (all ESD-official). The 32-bit
+    # (WOW64) loader resolves the api-set *names* it sees in import tables against
+    # FILES in X:\Windows\SysWOW64, while the ESD only packages them under
+    # Windows/SysWOW64/downlevel/ - a directory the 32-bit DLL search path does not
+    # include. Grafting the downlevel stubs flat into SysWOW64 (round-22 replica
+    # validated: boot fine + probe3 all-ok for every user32/gdi32/ole32 api-set
+    # except the schema-only gdi-internal-uap one, which the bios package provides
+    # as a forwarding shim next to H2OFFT-W) is what unfixes gdi32/user32/shell32/ole32.
+    echo "Grafting x86 api-set stubs (from SysWOW64 downlevel) + gdi32full into SysWOW64 root..."
+    7z x -y -o"$TMP/apistub" "$src" "$OS_IMAGE/Windows/SysWOW64/downlevel/api-ms-*.dll" >/dev/null
+    STUBS=$(find "$TMP/apistub/$OS_IMAGE/Windows/SysWOW64/downlevel" -name "api-ms-*.dll" | wc -l)
+    [ "$STUBS" -ge 90 ] || { echo "ERROR: expected ~112 x86 api-set stub files in ESD image $OS_IMAGE, found $STUBS" >&2; exit 1; }
+    find "$TMP/apistub/$OS_IMAGE/Windows/SysWOW64/downlevel" -name "api-ms-*.dll" | while read -r f; do
+      echo "add $f /Windows/SysWOW64/$(basename "$f")"
+    done >> "$TMP/graft.cmds"
+    echo "add $TMP/sidecar/$OS_IMAGE/Windows/SysWOW64/gdi32full.dll /Windows/SysWOW64/gdi32full.dll" >> "$TMP/graft.cmds"
 
     # Graft 3: the SxS Winners registry entries, generated from the same ESD's SOFTWARE hive
     # (the SxS binder resolves system assemblies through this registry index, not the
