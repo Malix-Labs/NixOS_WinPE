@@ -42,6 +42,14 @@ in
         entryPoint = "H2OFFT-W.exe";
         silentFlags = [ ];
       };
+      # RECON FIRST (round 24, decision 2026-09-20): the flasher launches on real
+      # hardware but every *.fd BIOS image is renamed in place first, so it can
+      # show the real dialogs / ME-channel text without any chance of flashing;
+      # the console then holds on screen for reconPauseMinutes (countdown, no keys
+      # needed) so the human can read, scroll, and photograph at leisure. Flip
+      # reconMode to false (nixos-rebuild switch) once the recon photos are read.
+      reconMode = lib.mkDefault true;
+      reconPauseMinutes = lib.mkDefault 10;
     };
   };
 }
