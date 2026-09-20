@@ -580,8 +580,14 @@
                   # copy it wholesale to firmware/GKCN65WW like the stage-files service does.
                   cp ${diskoEval.config.hardware.winpe.autorunScript} autorun.cmd
                   mcopy -o -i disk.img@@1048576 autorun.cmd ::/autorun.cmd
+                  # Sandbox-gated modal auto-clicker + its arm marker: the autorun only
+                  # starts wscript when SANDBOX.OK exists in the payload dir (%~dp1),
+                  # which is staged here and nowhere else - real hardware stays inert.
                   mmd -i disk.img@@1048576 ::/firmware
                   mmd -i disk.img@@1048576 ::/firmware/GKCN65WW
+                  mcopy -o -i disk.img@@1048576 ${./nixos/assets/sandbox-click.vbs} ::/firmware/GKCN65WW/sandbox-click.vbs
+                  echo ok > SANDBOX.OK
+                  mcopy -o -i disk.img@@1048576 SANDBOX.OK ::/firmware/GKCN65WW/SANDBOX.OK
                   for f in ${diskoEval.config.hardware.winpe.payloads.lenovo-bios.package}/*; do
                     if [ -d "$f" ]; then
                       # -s: recursive - the payload tree contains the Microsoft.VC90.MFC
@@ -617,10 +623,17 @@
                     cp ${pkgs.OVMF.fd}/FV/OVMF_VARS.fd VARS.fd
                     chmod +w VARS.fd
                     # Screendumps every 20s: the guest console is the only window into pre-startnet failures (bootmgr/winload have no logs).
-                    ( for t in $(seq 1 120); do sleep 20; printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true; done ) &
+                    (
+                      for t in $(seq 1 240); do
+                        sleep 20
+                        printf "screendump dbg-a$attempt-t$t.ppm\n" | timeout 2 ${pkgs.socat}/bin/socat - UNIX-CONNECT:mon.sock >/dev/null 2>&1 || true
+                        date +%s >> wd.log
+                      done
+                    ) &
                     WATCHDOG=$!
                     # Timeout 1200: WinRE-based boot.wim (~595MB) extracts slower under TCG than the old setup-PE image did.
-                    timeout 2400 qemu-system-x86_64 \
+                    date +%s > boot_start
+                    timeout 4800 qemu-system-x86_64 \
                       -machine q35 \
                       -m 4096 \
                       -smp 1 \
@@ -631,6 +644,9 @@
                       -no-reboot \
                       -display none \
                       -net none || true
+                    date +%s > boot_end
+                    echo "QEMU boot lived $(( $(cat boot_end) - $(cat boot_start) ))s"
+                    echo "watchdog iterations recorded: $(wc -l < wd.log 2>/dev/null)"
                     kill $WATCHDOG 2>/dev/null || true
                     # Success = complete autorun.log flushed by the guest before wpeutil reboot (killing QEMU mid-run leaves FAT unflushed, so the log may exist but be incomplete on earlier kills).
                     # With the real H2OFFT-W payload the run ends in the flashfail branch under QEMU:
@@ -640,7 +656,9 @@
                     # into the log before branching. The load-bearing QR assertion is the
                     # next grep: the 32-bit Insyde tool getting as far as logging proves
                     # the WOW64 + SxS graft chain works in the booted image.
-                    if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flasher process failed" autorun_result.log; then
+                    # since round 23 the grafted image lets the real flasher run to
+                    # completion; success = flashok branch which types this marker.
+                    if mtype -i disk.img@@1048576 ::/autorun.log > autorun_result.log 2>/dev/null && grep -q "Flasher exit code" autorun_result.log && grep -qE "Flash (staging completed successfully|process failed)" autorun_result.log; then
                       echo "complete autorun.log found on attempt $attempt"
                       # Breadcrumbs prove WHICH mount path fired (label lookup vs hardcoded fallback) - load-bearing for real hardware.
                       echo "--- guest startnet.log breadcrumbs ---"
@@ -663,11 +681,12 @@
                     fi
                   done
 
-                  # 6. Assert the real 32-bit Insyde flasher executed: H2OFFT-W reached
-                  # process creation via the WOW64 chain (payload.out capture or the
-                  # flashfail marker covers both outcomes; under QEMU the tool finds no
-                  # flashable device, exits nonzero, and the autorun logs the fail branch).
-                  grep "Flasher process failed\|Flash staging completed" autorun_result.log
+                  # 6. Assert the real 32-bit Insyde flasher executed to a terminal branch.
+                  # Under QEMU it cannot actually flash (no flashable platform device);
+                  # the sandbox clicker dismisses H2OFFT-W's unlabeled modal "Error"
+                  # dialog and the tool exits. RC=0 there is not proof a real flash
+                  # would succeed - it proves the full WOW64 + SxS graft chain works.
+                  grep "Flash staging completed successfully\|Flasher process failed" autorun_result.log
 
                   # Regression tripwire: 0xC0000135 (-1073741515 decimal) is the
                   # STATUS_DLL_NOT_FOUND the loader returns when an actctx-bound exe

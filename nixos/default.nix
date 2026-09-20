@@ -88,6 +88,15 @@ let
     rem Why output capture: InsydeFlash's silent-mode exit codes are deliberately ambiguous (every failure is 259) and its error text only goes to the console - capturing it makes hardware post-mortems possible.
     cd /d "%~dp1"
     set POUT=%~dp1payload.out
+    rem Sandbox-gated modal auto-clicker: SANDBOX.OK is staged only inside the winpe-qemu
+    rem check's disk image, never on real hardware, where the file is absent and this stays
+    rem inert. Without it the check cannot complete in emulated time: the 32-bit Insyde
+    rem tool raises an unlabeled modal "Error" dialog with an empty body before exiting,
+    rem and no console output is emitted to break the wait.
+    if exist "%~dp1SANDBOX.OK" (
+        echo [WinPE] SANDBOX mode: auto-clicker armed for modal "Error" dialogs >> %LOGFILE%
+        start "" /b wscript.exe //nologo "%~dp1sandbox-click.vbs" "%~dp1"
+    )
     call %~1 %~3 > "%POUT%" 2>&1
     set FLASH_RC=%errorlevel%
     rem DEBUG: the exit code is the only discriminator between "flasher ran and failed"
