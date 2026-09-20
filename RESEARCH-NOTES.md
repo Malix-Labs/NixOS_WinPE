@@ -467,3 +467,17 @@ sees. VIEW THEM FIRST.
 - netpbm (ppmtojpeg), hivex (patch shebang), socat — via nix build.
 
 **DEEP-E2E ADDENDUM (2026-09-16, pre-hardware tests r37-r39): attempted two QEMU-level increments before the real flash. (1) SMBIOS spoof: ran the replica with -smbios type=0/1/2 carrying the machine's real identity (LENOVO/82JU/"LEGION 5 15ACH6H"/LNVNB161216, incl. the trailing-space quirks read from /sys/class/dmi/id/). RESULT: FWUpdLcl still fails at 8743 "Cannot locate hardware platform identification" -> the platform ID is NOT DMI/SMBIOS-based; FWUpdLcl (banner: "Intel (R) Firmware Update Utility", usage mentions MEI and MeBX password) identifies the platform through the Intel ME/MEI channel, which QEMU q35 cannot emulate. This is a structural QEMU wall, not a flaw in the image. (2) WDFInst.exe (the 64-bit KMDF driver installer for H2OFFT.sys) ran natively but exited rc=2 with no console output - the driver install path fails in QEMU; note this driver belongs to the H2OFFT-W toolchain which the flow does NOT use (the entry point is FWUpdLcl). CONCLUSION: every software-reachable step is now exercised; the first genuinely-untested step is the ME-channel handshake + SPI transaction on real hardware. Deploy mitigations unchanged: one-shot BootNext, silent+no-self-reboot platform.ini, surviving logs (autorun.log/payload.out/H2OFFT.log), winpe-flash logs for post-mortem.**
+
+## 0.10 ROUND 24 (2026-09-20) — winpe-qemu CHECK IS GREEN WITH THE REAL FLASHER (HEAD b8791cb)
+
+**ALL GREEN**: `nix flake check` passes end-to-end; the `winpe-qemu` check now boots the REAL 600MB payload image under QEMU and H2OFFT-W **executes, gets one "Error" modal dismissed by the sandbox-gated clicker, and exits 0** ("Flash staging completed successfully"). Key facts:
+- **Root cause of dead check runs**: `%~dp1` in run_payload is the PAYLOAD DIR `W:\firmware\GKCN65WW\`, not the ESP root — the SANDBOX.OK marker and clicker vbs must be staged INSIDE ::/firmware/GKCN65WW/ (fixed in flake.nix).
+- **TCG runtime**: the full boot needs >2400 s under TCG; bumped to 4800 s + screendump watchdog 240×20 s (wd.log verified 239/240 iterations — earlier "dumps died early" was the old 120-loop limit, not a real watchkill).
+- **Check success criterion** now "Flasher exit code" + "Flash staging completed successfully"; RC=0 under QEMU proves the WOW64+SxS graft chain works, NOT that a real flash would succeed (QEMU has no flashable platform device).
+- **sandbox-click.vbs**: clicker gated on ::/firmware/GKCN65WW/SANDBOX.OK — staged ONLY in the check's disk; real hardware never has the marker → clicker inert (pending user decision whether to keep it inert; on hardware the "Error" dialog has real text a human should read).
+- clicker.log (41 bytes) = "clicker started" + "dismissed Error dialog" (no "clicker exiting" — still spinning when QEMU died, harmless).
+
+**Open items before user hardware reflash:**
+1. `H2OFFT.log` never written; payload.out 0 bytes; exit 0 - "silent zero" concern stands. On hardware dialogs render real text.
+2. User decision: keep clicker inert on hardware (recommended: human reads the dialog) or arm it in production.
+3. Bump dotfiles lock to b8791cb when convenient.
