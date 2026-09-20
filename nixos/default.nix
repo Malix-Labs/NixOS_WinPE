@@ -136,23 +136,16 @@ let
     ${
       if cfg.nonInteractive then
         ''
-          rem Human pause with on-screen countdown: gives the operator time to read,
-          rem scroll, and photograph; zero keys are required to wait the full window
-          rem out (the tool's own modal, if present, has to be dismissed with Enter).
+          rem Explicit human pause: read / scroll / photograph freely, then press
+          rem ENTER when done - that one keypress is the user's chosen way to
+          rem signal "I've seen everything I needed", and it's also the only
+          rem input the whole WinPE round requires (no text entry at any point).
           echo ============================================================
           echo   HUMAN PAUSE - take your time reading / scrolling / photographing.
-          echo   Nothing else is required of you; auto-reboot in ${toString cfg.reconPauseMinutes} minutes.
-          echo   If a dialog box is in the way, press ENTER once to dismiss it.
+          echo   When you are done, press ENTER once: the system reboots to Linux.
           echo ============================================================
           echo [WinPE] HUMAN PAUSE screen-commenced >> %LOGFILE%
-          set /a HUMAN_SECS=${toString (cfg.reconPauseMinutes * 60)}
-          :humanpause
-          if %HUMAN_SECS% LEQ 0 goto :humanpauseend
-          echo Auto-reboot in %HUMAN_SECS% seconds ... (you can scroll or read; no keys needed)
-          ping -n 2 127.0.0.1 >nul
-          set /a HUMAN_SECS=%HUMAN_SECS%-1
-          goto :humanpause
-          :humanpauseend
+          pause
           echo [WinPE] HUMAN PAUSE screen-concluded: rebooting to Linux >> %LOGFILE%
           wpeutil reboot
         ''
@@ -182,16 +175,6 @@ in
       check can only show as an empty-bodied modal). The human photographs the screen;
       nothing is clicked, typed, or written to the BIOS.
     '';
-
-    reconPauseMinutes = lib.mkOption {
-      type = lib.types.int;
-      default = 30;
-      description = ''
-        Minutes the console holds on screen after the flasher exits (recon or otherwise);
-        affects the post-flash fail/ok branch: a printed countdown replaces the old
-        4-second instant reboot so the human actually gets to read/scroll/photograph.
-      '';
-    };
 
     mountPoint = lib.mkOption {
       type = lib.types.str;
