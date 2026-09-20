@@ -79,6 +79,20 @@ let
     set FOUND_PAYLOAD=1
     echo Found firmware package: %~2
     echo [WinPE] Found firmware package: %~2 >> %LOGFILE%
+    ${lib.optionalString cfg.reconMode ''
+      rem Recon mode: make flashing impossible - rename every *.fd BIOS image in the
+      rem payload dir in place so the tool's precondition path (real dialogs, real ME
+      rem channel text) runs on hardware while the flash cannot proceed.
+      echo [WinPE] RECON mode: renaming *.fd beside the flasher so flashing cannot proceed >> %LOGFILE%
+      for %%b in ("%~dp1*.fd") do (
+          echo [WinPE] RECON moved: %%~nxb -^> %%~nxb.recon >> %LOGFILE%
+          ren "%%~fb" "%%~nxb.recon"
+      )
+      for /d %%d in ("%~dp1*") do for %%b in ("%%d\*.fd") do (
+          echo [WinPE] RECON moved: %%d\%%~nxb -^> %%~nxb.recon >> %LOGFILE%
+          ren "%%~fb" "%%~nxb.recon"
+      )
+    ''}
     echo Staging firmware update...
     echo [WinPE] Executing flasher: %~1 %~3 >> %LOGFILE%
     rem Runs the payload synchronously (waits even for GUI-subsystem PE binaries).
@@ -122,8 +136,24 @@ let
     ${
       if cfg.nonInteractive then
         ''
-          echo [WinPE] Non-interactive mode active: rebooting to Linux immediately... >> %LOGFILE%
-          ping -n 4 127.0.0.1 >nul
+          rem Human pause with on-screen countdown: gives the operator time to read,
+          rem scroll, and photograph; zero keys are required to wait the full window
+          rem out (the tool's own modal, if present, has to be dismissed with Enter).
+          echo ============================================================
+          echo   HUMAN PAUSE - take your time reading / scrolling / photographing.
+          echo   Nothing else is required of you; auto-reboot in ${toString cfg.reconPauseMinutes} minutes.
+          echo   If a dialog box is in the way, press ENTER once to dismiss it.
+          echo ============================================================
+          echo [WinPE] HUMAN PAUSE screen-commenced >> %LOGFILE%
+          set /a HUMAN_SECS=${toString (cfg.reconPauseMinutes * 60)}
+          :humanpause
+          if %HUMAN_SECS% LEQ 0 goto :humanpauseend
+          echo Auto-reboot in %HUMAN_SECS% seconds ... (you can scroll or read; no keys needed)
+          ping -n 2 127.0.0.1 >nul
+          set /a HUMAN_SECS=%HUMAN_SECS%-1
+          goto :humanpause
+          :humanpauseend
+          echo [WinPE] HUMAN PAUSE screen-concluded: rebooting to Linux >> %LOGFILE%
           wpeutil reboot
         ''
       else
@@ -144,6 +174,24 @@ in
     enable = lib.mkEnableOption "WinPE bare-metal firmware updater and recovery subsystem";
 
     nonInteractive = lib.mkEnableOption "fully automated non-interactive firmware execution with log persistence and immediate reboot";
+
+    reconMode = lib.mkEnableOption ''
+      RECON reconnaissance mode: the flasher launches but cannot flash - every *.fd
+      BIOS image is renamed in place before the tool starts, so its precondition
+      path shows the REAL device/platform dialog text on screen (which the winpe-qemu
+      check can only show as an empty-bodied modal). The human photographs the screen;
+      nothing is clicked, typed, or written to the BIOS.
+    '';
+
+    reconPauseMinutes = lib.mkOption {
+      type = lib.types.int;
+      default = 30;
+      description = ''
+        Minutes the console holds on screen after the flasher exits (recon or otherwise);
+        affects the post-flash fail/ok branch: a printed countdown replaces the old
+        4-second instant reboot so the human actually gets to read/scroll/photograph.
+      '';
+    };
 
     mountPoint = lib.mkOption {
       type = lib.types.str;
