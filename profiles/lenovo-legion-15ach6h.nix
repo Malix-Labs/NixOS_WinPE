@@ -26,6 +26,11 @@ in
   config = {
     hardware.winpe = {
       enable = lib.mkDefault true;
+      # The winpe-flash nonInteractive flow is the one with the explicit HUMAN PAUSE
+      # + single ENTER (no typed commands); interactive/config mode drops to cmd.exe
+      # which requires typing "wpeutil reboot" - unsafe with unknown keyboard layout
+      # (round 14 constraint).
+      nonInteractive = lib.mkDefault true;
       payloads."lenovo-bios" = {
         enable = lib.mkDefault true;
         package = biosPackage;
