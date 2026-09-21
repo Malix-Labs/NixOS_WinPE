@@ -55,6 +55,25 @@ in
       # truth), and a manual single-button dismissal lets it exit cleanly.
       # reconMode stays false for the real flash; re-enable for re-recon any time.
       reconMode = lib.mkDefault false;
+      # Pre-flash driver staging: H2OFFT-W's precondition error (void "Error" modal,
+      # RC=0, no log) reproduced on hardware even with BIOS.fd present, after recon
+      # proved the *missing-BIOS.fd* precondition works. Hypothesis per the INF:
+      # the tool needs the KMDF kernel service H2OFFT (H2OFFT64.sys ->
+      # %12%\H2OFFT64.sys, root device {416C2604-443B-436F-9E1D-607BDC3CC785}\H2OFFT)
+      # to be installed before it can talk to the BIOS via IHISI; WDFInst.exe does
+      # exactly that (UpdateDriverForPlugAndPlayDevicesW + SetupUninstallOEMInfW)
+      # and nothing in the vendor flow auto-runs it. Stage it, log rc + state.
+      preFlashCommands = lib.concatStringsSep "\n" [
+        "echo [pre] running WDFInst.exe (installs H2OFFT KMDF driver service)"
+        "WDFInst.exe > WDFInst.out 2>&1"
+        "echo [pre] WDFInst rc=%errorlevel%"
+        "type WDFInst.out"
+        "type WDFInst.out >> %LOGFILE%"
+        "sc query H2OFFT > H2svc.out 2>&1"
+        "echo [pre] sc query H2OFFT rc=%errorlevel%"
+        "type H2svc.out"
+        "type H2svc.out >> %LOGFILE%"
+      ];
     };
   };
 }

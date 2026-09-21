@@ -105,14 +105,24 @@ let
       start "" /b cmd /c "ping -n 100 127.0.0.1 >nul & taskkill /IM H2OFFT-W.exe /F >nul 2>&1"
     ''}
     echo Staging firmware update...
-    echo [WinPE] Executing flasher: %~1 %~3 >> %LOGFILE%
     rem Runs the payload synchronously (waits even for GUI-subsystem PE binaries).
     rem Why call and not start /wait: start spawns a second console window and WinPE's desktop heap cannot allocate it - "Not enough memory resources are available to process this command." (validated under QEMU). call executes in this console, waits, and propagates errorlevel.
     rem Why unquoted %~1: wine cmd rejects quoted call targets ("Invalid name"); payload paths live on the ESP and contain no spaces.
     rem Why cd /d: InsydeFlash locates platform.ini and BIOS.fd relative to the process working directory, not the executable path.
     rem Why output capture: InsydeFlash's silent-mode exit codes are deliberately ambiguous (every failure is 259) and its error text only goes to the console - capturing it makes hardware post-mortems possible.
+    echo [WinPE] Executing flasher: %~1 %~3 >> %LOGFILE%
+    echo Executing flasher: %~1 %~3
     cd /d "%~dp1"
     set POUT=%~dp1payload.out
+    ${lib.optionalString (cfg.preFlashCommands != "") ''
+      rem Pre-flash instrumentation stage (profile-supplied): runs BEFORE the flasher
+      rem launch, INSIDE the payload dir. Used to stage the Insyde KMDF driver service
+      rem (WDFInst.exe), gadget drivers, or anything the flasher expects pre-installed;
+      rem every step logs to the ESP so hardware post-mortems stay possible.
+      echo [WinPE] Pre-flash stage running >> %LOGFILE%
+      ${cfg.preFlashCommands}
+      echo [WinPE] Pre-flash stage done >> %LOGFILE%
+    ''}
     rem Sandbox-gated modal auto-clicker: SANDBOX.OK is staged only inside the winpe-qemu
     rem check's disk image, never on real hardware, where the file is absent and this stays
     rem inert. Without it the check cannot complete in emulated time: the 32-bit Insyde
@@ -124,6 +134,13 @@ let
     )
     call %~1 %~3 > "%POUT%" 2>&1
     set FLASH_RC=%errorlevel%
+    rem H2OFFT.log sweep: the tool is configured to write H2OFFT.log (platform.ini
+    rem Log_file Flag=1) but never writes into its own FAT-backed CWD on hardware;
+    rem it may write to %WINDIR% (RAM disk X:\) which dies with the reboot. Copy any
+    rem instance back to the ESP synchronously, and record what exists.
+    if exist X:\H2OFFT.log copy /y X:\H2OFFT.log "%~dp1H2OFFT-xdisk.log" >nul 2>&1
+    dir /b X:\H2OFFT*.log >> %LOGFILE% 2>&1
+    if exist H2OFFT.log copy /y H2OFFT.log "%~dp1H2OFFT-cwd.log" >nul 2>&1
     rem DEBUG: the exit code is the only discriminator between "flasher ran and failed"
     rem (1/259/3010 after printing something) and "flasher never started" (9009) -
     echo [WinPE] Flasher exit code: %FLASH_RC% >> %LOGFILE%
@@ -186,6 +203,18 @@ in
       check can only show as an empty-bodied modal). The human photographs the screen;
       nothing is clicked, typed, or written to the BIOS.
     '';
+
+    preFlashCommands = lib.mkOption {
+      type = lib.types.lines;
+      default = "";
+      description = ''
+        Batch-mode commands (CRLF-joined) executed by autorun.cmd right before the
+        payload's `call`, from inside the payload working directory on the WinPE
+        partition. Intended for driver staging/inspection the flasher expects to
+        find pre-installed (e.g. Insyde WDFInst for H2OFFT.sys). Output is
+        redirected to the ESP's autorun.log for post-mortem.
+      '';
+    };
 
     mountPoint = lib.mkOption {
       type = lib.types.str;
