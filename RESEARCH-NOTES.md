@@ -481,3 +481,16 @@ sees. VIEW THEM FIRST.
 1. `H2OFFT.log` never written; payload.out 0 bytes; exit 0 - "silent zero" concern stands. On hardware dialogs render real text.
 2. User decision: keep clicker inert on hardware (recommended: human reads the dialog) or arm it in production.
 3. Bump dotfiles lock to b8791cb when convenient.
+
+## 0.11 ROUND 25 (2026-09-21) — REAL-HARDWARE RECON: TOOL RUNS, VOID DIALOG CONFIRMED, RC=0-LIES CONFIRMED
+
+First REAL hardware recon round (BIOS.fd renamed away by recon autosandbox, watchdog armed, HUMAN PAUSE flow):
+- BIOS.fd was renamed to BIOS.fd.recon cleanly (screen: "[recon] renaming BIOS.fd on-screen" / "[recon] renamed OK" / "[recon] arming 90s watchdog").
+- H2OFFT-W.exe launched on real hardware and raised the SAME "Error" modal as QEMU: title Error, warning icon, EMPTY BODY, single unnamed button. The void body is the tool's representation of "precondition failed" (BIOS.fd absent) on BOTH QEMU and hardware - the dialog text is simply not renderable under this WinPE, for anyone (photo evidence round 25).
+- Clicking the single button dismisses it -> tool exits RC=0 -> batch reaches flashok branch ("Flash staging completed") -> wpeutil reboot. The autorun's flashok NEVER shows HUMAN PAUSE (only flashfail has it) - by design; keep as-is: on real flash success the reboot IS the desired ending.
+- exit code IS A LIE on hardware: RC=0 with provably-nothing-flashed. Post-flash verification MUST be `dmidecode -s bios-version` (target GKCN65WW).
+- H2OFFT.log: still never written, even on hardware. payload.out: still never materialized after reboot (FAT flush race suspected). Our own autorun.log remains the only reliable write.
+- The 90s watchdog was NOT needed (tool exited when the dialog was clicked) but is armed and harmless in recon mode.
+- ESP notes: the stage-files service re-copies the payload dir on every deployment, which un-renames any previous recon rename (observed; benign by design - recon re-arms the rename before every flasher launch).
+- Deployment Boots used: round #1 = pre-recon deployment (interactive mode bug caught in review, redployed); round #2 = recon with breadcrumbs (successful, evidence above).
+NEXT: reconMode=false, real flash (user clicks the void dialog if it appears; AC power required for Insyde flashers; post-flash dmidecode bios-version == GKCN65WW).

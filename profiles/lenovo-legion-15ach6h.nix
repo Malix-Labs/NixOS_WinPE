@@ -47,13 +47,14 @@ in
         entryPoint = "H2OFFT-W.exe";
         silentFlags = [ ];
       };
-      # RECON FIRST (round 24, decision 2026-09-20): the flasher launches on real
-      # hardware but every *.fd BIOS image is renamed in place first, so it can
-      # show the real dialogs / ME-channel text without any chance of flashing;
-      # the console then holds with an explicit HUMAN PAUSE + ENTER (no typing,
-      # just the one explicit key) that reboots to Linux when the user is done.
-      # Flip reconMode to false (nixos-rebuild switch) once the recon photos are read.
-      reconMode = lib.mkDefault true;
+      # RECON COMPLETE (rounds 26/27, 2026-09-21): recon proved on real hardware the
+      # real Insyde tool RUNS (empty-body "Error" modal is its precondition-fail
+      # dialog for the renamed-away BIOS.fd; body renders empty under WinPE both in
+      # QEMU and on hardware), exits RC=0 even on failure (so exit code is not a
+      # success marker - asyncio dmidecode bios-version post-check is the ground
+      # truth), and a manual single-button dismissal lets it exit cleanly.
+      # reconMode stays false for the real flash; re-enable for re-recon any time.
+      reconMode = lib.mkDefault false;
     };
   };
 }
