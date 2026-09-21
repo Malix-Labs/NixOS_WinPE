@@ -66,7 +66,9 @@ in
       # Pre-flash driver staging was tested (round 28, 2026-09-21): drvload +
       # pnputil stage the package (oem0.inf), WDFInst is silent rc=2, and the
       # H2OFFT service never materializes (root device node absent in WinPE).
-      # Disabling the matrix; the next lever is [FDFile] FileName=BIOS.fd.
+      # Round 30's manufactured service didn't change the tool's outcome either
+      # (round 30 local-replica verdict 2026-09-21: the REAL blocker is the
+      # SHA-1 signature refusal on FlsHook.exe, decoded by probe4.exe).
       preFlashCommands = "";
     };
   };
