@@ -69,6 +69,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     sed -i '/^\[Log_file\]/,/^\[/ s/^Flag=0/Flag=1/' $out/platform.ini
     # Silent success must return 0 (not the InsydeFlash default 3010 "reboot required"): the autorun script branches on a plain "if errorlevel 1".
     sed -i 's/^RETURN_SUCCESSFUL=0,3010/RETURN_SUCCESSFUL=0,0/' $out/platform.ini
+    # Round 29 (2026-09-21): pin the BIOS image path explicitly. The vendor default is
+    # an empty [FDFile] FileName (auto-locate "the FD file from CWD"), and the tool's
+    # precondition fail path on WinPE = the unreadable void "Error" modal with RC=0 -
+    # no way to distinguish "file not found" from "driver missing". Explicit wins:
+    # also cheaper than the driver install matrix, which round 28 proved only stages
+    # the driver package (oem0.inf published) without ever creating the H2OFFT
+    # service (root device node enumeration absent in this WinPE).
+    sed -i '/^\[FDFile\]/,/^\[/{s/^FileName=.*\r\?$/FileName=BIOS.fd\r/}' $out/platform.ini
     # The RT_MANIFEST strip step is GONE as of 2026-09-18: H2OFFT-W runs an embedded
     # Authenticode WinVerifyTrust pass over EVERY companion tool at startup
     # (validated under wine: WinVerifyTrust calls on FlsHook.exe/FWUpdLcl.exe trace

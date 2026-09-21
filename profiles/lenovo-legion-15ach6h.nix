@@ -63,27 +63,11 @@ in
       # to be installed before it can talk to the BIOS via IHISI; WDFInst.exe does
       # exactly that (UpdateDriverForPlugAndPlayDevicesW + SetupUninstallOEMInfW)
       # and nothing in the vendor flow auto-runs it. Stage it, log rc + state.
-      preFlashCommands = lib.concatStringsSep "\n" [
-        "echo [pre] drvload H2OFFT.inf (WinPE builtin driver install)"
-        "drvload H2OFFT.inf > drvload.out 2>&1"
-        "echo [pre] drvload rc=%errorlevel%"
-        "type drvload.out"
-        "type drvload.out >> %LOGFILE%"
-        "echo [pre] pnputil /add-driver H2OFFT.inf /install"
-        "pnputil /add-driver H2OFFT.inf /install > pnputil.out 2>&1"
-        "echo [pre] pnputil rc=%errorlevel%"
-        "type pnputil.out"
-        "type pnputil.out >> %LOGFILE%"
-        "echo [pre] running WDFInst.exe (installs H2OFFT KMDF driver service)"
-        "WDFInst.exe H2OFFT.inf > WDFInst.out 2>&1"
-        "echo [pre] WDFInst rc=%errorlevel%"
-        "type WDFInst.out"
-        "type WDFInst.out >> %LOGFILE%"
-        "reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\H2OFFT\" > H2svc.reg 2>&1"
-        "echo [pre] reg query H2OFFT service rc=%errorlevel% ^(0 = installed^)"
-        "type H2svc.reg"
-        "type H2svc.reg >> %LOGFILE%"
-      ];
+      # Pre-flash driver staging was tested (round 28, 2026-09-21): drvload +
+      # pnputil stage the package (oem0.inf), WDFInst is silent rc=2, and the
+      # H2OFFT service never materializes (root device node absent in WinPE).
+      # Disabling the matrix; the next lever is [FDFile] FileName=BIOS.fd.
+      preFlashCommands = "";
     };
   };
 }
