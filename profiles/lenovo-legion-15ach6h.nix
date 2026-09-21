@@ -64,15 +64,25 @@ in
       # exactly that (UpdateDriverForPlugAndPlayDevicesW + SetupUninstallOEMInfW)
       # and nothing in the vendor flow auto-runs it. Stage it, log rc + state.
       preFlashCommands = lib.concatStringsSep "\n" [
+        "echo [pre] drvload H2OFFT.inf (WinPE builtin driver install)"
+        "drvload H2OFFT.inf > drvload.out 2>&1"
+        "echo [pre] drvload rc=%errorlevel%"
+        "type drvload.out"
+        "type drvload.out >> %LOGFILE%"
+        "echo [pre] pnputil /add-driver H2OFFT.inf /install"
+        "pnputil /add-driver H2OFFT.inf /install > pnputil.out 2>&1"
+        "echo [pre] pnputil rc=%errorlevel%"
+        "type pnputil.out"
+        "type pnputil.out >> %LOGFILE%"
         "echo [pre] running WDFInst.exe (installs H2OFFT KMDF driver service)"
-        "WDFInst.exe > WDFInst.out 2>&1"
+        "WDFInst.exe H2OFFT.inf > WDFInst.out 2>&1"
         "echo [pre] WDFInst rc=%errorlevel%"
         "type WDFInst.out"
         "type WDFInst.out >> %LOGFILE%"
-        "sc query H2OFFT > H2svc.out 2>&1"
-        "echo [pre] sc query H2OFFT rc=%errorlevel%"
-        "type H2svc.out"
-        "type H2svc.out >> %LOGFILE%"
+        "reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\H2OFFT\" > H2svc.reg 2>&1"
+        "echo [pre] reg query H2OFFT service rc=%errorlevel% ^(0 = installed^)"
+        "type H2svc.reg"
+        "type H2svc.reg >> %LOGFILE%"
       ];
     };
   };
