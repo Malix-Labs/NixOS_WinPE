@@ -85,13 +85,24 @@ let
       rem channel text) runs on hardware while the flash cannot proceed.
       echo [WinPE] RECON mode: renaming *.fd beside the flasher so flashing cannot proceed >> %LOGFILE%
       for %%b in ("%~dp1*.fd") do (
+          echo [recon] renaming %%~nxb on-screen
           echo [WinPE] RECON moved: %%~nxb -^> %%~nxb.recon >> %LOGFILE%
-          ren "%%~fb" "%%~nxb.recon"
+          ren "%%~fb" "%%~nxb.recon" 2>con
+          if exist "%~dp1%%~nxb.recon" (
+              echo [recon] renamed OK
+          ) else (
+              if exist "%~dp1%%~nxb" (echo [recon] RENAME FAILED - file still present ^(rc=%errorlevel%^)) else (echo [recon] renamed OK)
+          )
       )
       for /d %%d in ("%~dp1*") do for %%b in ("%%d\*.fd") do (
           echo [WinPE] RECON moved: %%d\%%~nxb -^> %%~nxb.recon >> %LOGFILE%
-          ren "%%~fb" "%%~nxb.recon"
+          ren "%%~fb" "%%~nxb.recon" 2>con
       )
+      rem Watchdog: on hardware the tool blocked 10+ min on a dialog we could not see
+      rem (2026-09-21 recon round). With the *.fd renamed there is nothing to flash,
+      rem so force-killing a tool that refuses to exit is SAFE here; the tool's exit
+      echo [recon] arming 90s watchdog for the flasher
+      start "" /b cmd /c "ping -n 100 127.0.0.1 >nul & taskkill /IM H2OFFT-W.exe /F >nul 2>&1"
     ''}
     echo Staging firmware update...
     echo [WinPE] Executing flasher: %~1 %~3 >> %LOGFILE%
