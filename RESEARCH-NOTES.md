@@ -589,3 +589,57 @@ NEXT: reconMode=false, real flash (user clicks the void dialog if it appears; AC
 4. Windows 24H2's package must STAY selectable (esdBase = "modern-24h2") — user explicitly wants the modern base preserved for other firmware work.
 
 **Standing user contract (unchanged, 2026-09-24):** one hypothesis per reboot; QEMU-local gate BEFORE any user reboot; official binaries only (the one committed forwarder-shim exception is user-approved); all commits+pushes logged; no tag yet without explicit user approval.
+
+## 0.16 ROUNDS 42–43 (2026-09-23/24, LOCAL ONLY, NO USER REBOOTS) — 22H2 BASE GOES ALIVE; THREE NEW WALLS NAMED; LENOVO PAGE VERIFICATION CORRECTS ROUND-41 CLAIM — READ FIRST
+
+**LENOVO VERIFICATION (2026-09-24, user-requested; CORRECTS the round-41 justification):**
+- Verified `https://pcsupport.lenovo.com/.../legion-5-15ach6h/82ju.../downloads/driver-list` + the catalog: the ONLY BIOS entry for 82JU = **ds549277 "BIOS Update for Windows 10 (64-bit) and Windows 11 (64-bit)" → `gkcn65ww.exe`**, a *flash-from-Operating-System* installer ("Double click the gkcn65ww.exe icon... flash on what platform").
+- **There is NO Bootable-CD/WinPE ISO updater for the 15ACH6H.** The Utility+Bootable-CD split (r19uj29w.exe / r19ur29w.iso pattern) exists only on ThinkPads (e.g. ds545476 L14). So Lenovo ships NO WinPE updater for this machine; the documented flow = boot Windows, run gkcn65ww.exe.
+- Consequence for the design language: the round-41 note's phrase "Lenovo's own update utility runs its flashes from a 22621-class PE" was an ASSUMPTION and is FALSE for this model. What remains true and operative: the toolchain's SUPPORTED era = Win10/11 (22H2-class), i.e. an environment where its 2008-era SHA-1 Authenticode chain still validates. winpe-image-legacy reproduces that environment class as a WinPE. The round-42 probe5 verdict (once wintrust loads) is the empirical confirmation of the era choice, not the vendor page.
+
+**THE 22H2 (22621) LOCAL REPLICA STORY — walls found, named, grafted (in order):**
+1. **Physical harness pieces lost to time/GC mid-session**: the old 4-partition `disk.img` lost its partition table (stage2.sh only dd's p4); original `stage-replica.sh` is gone; documented fallback used: the `winpe-qemu` check's own 900M single-partition layout (truncate 900M + `sgdisk --new=1:2048:0 --typecode=1:EF00` + `mkfs.vfat -F 32 -n WinPE --offset=2048` + mcopy of image trees). NOTE: staging the WIM into the ESP's own `::/sources/boot.wim` is REQUIRED with the 22H2 trees (0xc000000f → 0xc000000d otherwise); a freshly built 4-partition disk reproduced 0xc000000d even with the proven 24H2 WIM → do not trust a recreated 4-partition layout without re-validating trees. TODAY's working replica = `.debug/hwreplica/probe.img` (900M, single EF00 partition, 22H2 boot/EFI trees + boot-XX.wim + probe*.exe + firmware/GKCN65WW payload).
+2. **WOW64 was dead-null (probe rc=216 ERROR_EXE_MACHINE_TYPE_MISMATCH)**: the 22621 WinRE base ships **NO `SysWOW64\ntdll.dll`** (26100's did). FIX: graft `ntdll.dll` (22621 image-4 SysWOW64) — probe then ran; `version.dll` next (wintrust pulls `api-ms-win-core-version-private-l1-1-0` → resolves via version.dll).
+3. **THE UCRT WALL (`0xE7000000` gle cluster, THE round-43 finding)**: `bcrypt/crypt32/dpapi/ncrypt/oleaut32/rsaenh`, `combase`, `msvcp_win` AND `api-ms-win-crt-*` all fail LoadLibrary with **gle=0xE7000000** on 22H2 build → the shared cause: **the UCRT**. GROUND TRUTH: the 22621 ESD carries **NO `SysWOW64/ucrtbase.dll`** — the 32-bit UCRT lives ONLY at `4/Windows/SysWOW64/downlevel/ucrtbase.dll` (1,128,496 bytes; System32/ucrtbase.dll = amd64 1,133,584). The WinPE 24H2 base ships SysWOW64/ucrtbase natively; 22H2 WinRE does not. FIX (round 43): graft `downlevel/ucrtbase.dll` → `/Windows/SysWOW64/ucrtbase.dll` (coreWow64Files entry `"downlevel/ucrtbase.dll"` + basename-dest `add` + explicit requiredWimPaths `SysWOW64/ucrtbase.dll`).
+4. **The wintrust DllMain wall (gle=1114)**: 22H2-era `WinVerifyTrust` still fails at DllMain init AFTER all 35 of its imports individually load OK (probe9: per-import map all OK). The 1114 fail is now believed to be in the CRT-load cluster (ucrtbase/combase/msvcp_win) — the round-43 ucrtbase graft is the test pending the next boot.
+5. **BSOD poison class (round-21's) reproduced on 22H2**: the 93-dll SysWOW64 blast-graft (delta vs 24H2's base-shipped set incl. combase/dwmapi/winmm/uxtheme/comdlg32/...) boot-fixated into a :( at ~30s. Bisecting to minimal: coreWow64Files reverted to {advapi32, gdi32, kernel32, KernelBase, msvcp_win, msvcrt, ntdll, ole32, rpcrt4, sechost, shell32, shlwapi, user32, version, downlevel/ucrtbase, wldp, wintrust + cmd.exe} (+ sidecars comdlg32/dwmapi/gdi32full/uxtheme/winmm from the bios package). **On 22H2, dwmapi/winmm/uxtheme/comdlg32 remain WIM-poison as on 24H2 (round-21 class persists!).** The dwmapi/winmm/uxtheme/comdlg32 NEED to come ONLY as bios sidecar files.
+6. **API-set schema sanity on 22H2**: probe9 map shows the 91 downlevel api-ms-*.dll stubs + 22H2-era ntdll schema resolve FIRST-LEVEL imports of wintrust fine; version-private, libraryloader-l1-2-1, heap-l2-1-0 etc. resolve WITHOUT physical files (schema works on 22H2 32-bit ntdll — era-correct unlike 24H2's missing gdi-uap!).
+
+**POSITIVE RESULT (round 43): FWUpdLcl.exe (32-bit Insyde/Intel companion) RUNS END-TO-END on the 22H2 image** — full banner "Intel (R) Firmware Update Utility Version: 8.0.10.1464" + usage + Error 8743 "Unknown or Unsupported Platform" (=QEMU-expected; the tool ran its full flow) → rc=1 exit handled cleanly. The era-matched 32-bit vendor-app stack WORKS on the local 22H2 replica. chain reaction: this makes the 22621 ESD the plausible production base for the REAL flash boot IF H2OFFT-W's environment (wintrust+UCRT+VC90 sidecars) completes.
+
+**TOOLING CREATED (reusable, .debug/hwreplica):**
+- `probe9.c/exe` (32-bit, per-api-set LoadLibrary map; mingw32 `pkgsCross.mingw32.stdenv.cc` — NOTE: needs `-L<mcfgthreads-lib>`: stdenv cc fails `-lmcfgthread` unless `-L$(mcfgthreads pkg)/lib` given; store path `/nix/store/fzciy24...-mcfgthread.../lib`).
+- `probe9c.c/exe` (bcrypt/crypt32/cryptbase/dpapi/ncrypt/oleaut32/rsaenh batch; found the 0xE7 cryptclass), `probe9d.c/exe` (51-name union of the 6's imports minus the known-OK names: found the ucrt chain + combase + msvcp_win as the 0xE7 cluster).
+- `/tmp/opencode/run-replica.sh` (the ONE-TRUE runner: `Q=.../roots/qemu/bin/...`, `OV=.../roots/ovmf`, `TAG=...`, socat loop, 900 s, mtype verdict), with its own `.debug/roots/qemu` + `ovmf` symlinks.
+- `autorun-p522.cmd` (probe5b-on-22H2, different log redirect), `autorun-fw.cmd` (FWUpdLcl runner = the round-42 full-32-bit-run witness), `autorun-running.cmd`/`p9d` runners.
+- Store path **GC hygiene**: HUGE pain; multiple re-downloads because .debug symlinks are NOT GC roots, and big store paths got erased mid-session (`05skwkc9` ESD died mid-build repeatedly). CURRENT bindings: `.debug/roots/{qemu,ovmf,mingw32,cfgthread,esd-22h2,gc-*}`. NOTE for next sessions: after each `nix build`, re-verify that the latest path still exists before launching a replica (`ls roots/<thing>/bin/qemu-system-x86_64` etc.) and if needed use `nix build --no-link --print-out-paths` THEN IMMEDIATELY `-o-root` into .debug/roots/gc-<name>.
+
+**HOW TO RUN THE LOCAL REPLICA (current recipe, exact):**
+```
+cd .debug/hwreplica
+# Build 22H2 WIM (only after winpe-image-legacy changes):
+nix build --no-link --print-out-paths .#packages.x86_64-linux.winpe-image-legacy   # see winpe-image version
+cp <built>/sources/boot.wim boot-nNEW.wim; chmod +w boot-nXX.wim
+printf 'add /nix/store/ysb28fy2np6ga90y1pr2kcanmcwkr3zi-winpeshl.ini /Windows/System32/winpeshl.ini\nadd /nix/store/g26gsf9xiypy28xs0chxq93xbhvw4b1c-startnet.cmd /Windows/System32/startnet.cmd\n' | wimlib update boot-nXX.wim 1
+nix shell nixpkgs#mtools -c mcopy -o -i probe.img@@1048576 boot-nXX.wim ::/sources/boot.wim
+nix shell nixpkgs#mtools -c mcopy -o -i probe.img@@1048576 autorun-pXX.cmd ::/autorun.cmd
+TAG=nXX bash /tmp/opencode/run-replica.sh
+nix shell nixpkgs#mtools -c mtype -i probe.img@@1048576 ::/probe5.out ::/probe9d.log ...
+```
+- The QEMU binary in `.debug/roots/qemu` may get GC-beaten: if it disappears, `nix build --no-link --print-out-paths nixpkgs#qemu_kvm` and re-symlink. Same for OVMF.
+- Build the mingw probes with `pkgsCross.mingw32.stdenv.cc` (icanhazname: `/nix/store/yfh0nvfbhf8ml76hjxj030a70aj56cxv-i686-w64-mingw32-gcc-wrapper-15.3.0`) + `-L$(mcfgthreads pkg)/lib`.
+- mcfgthread = at `nixpkgs#pkgsCross.mingw32.windows.mcfgthreads` (NixOS's envs call it `-lmcfgthread`; the exact store path = /nix/store/fzciy24vjmlij0cnjssiglvav58xlqgk-mcfgthread-i686-w64-mingw32-2.4.2/lib).
+
+**Store paths (bound to .debug/roots as of 2026-09-24 00:15):**
+- winpe-image-legacy (ucrtbase graft, HEAD-side): `/nix/store/yd3ivfzxpgwz939bk042sa4x3yjwq1z4-winpe-image-10.0.22621.1702` (also `177i7haj0nmr` earlier build)
+- 22H2 ESD: `/nix/store/05skwkc9shkwqgn2n6f7ps1brcpkk7cn-22621.1702.230505-1222...esd`
+- qemu/OVMF symlinked in `.debug/roots/{qemu,ovmf}` — RE-DERIVE if lost.
+
+**CURRENT UNRESOLVED = the 0xE7 cluster persists:** the last probe9d boot (n59/`yd3ivfzx` WIM) timed out rc=124 with the SAME 0xE7 cluster (api-ms-win-crt-private/runtime/string + combase + msvcp_win). Either (a) the ucrtbase graft didn't reach the guest (the mcopy may have silently kept an older boot.wim — VERIFY `::/sources/boot.wim` reflects the newest build), or (b) SAP: the graft needs its OWN dependency chain pulled in too. Next-local gate (round 44): re-stage boot-nXX.wim from the CURRENT winpe-image-legacy output (`nix build --no-link --print-out-paths ... 2>&1 | tail -1` energy), re-stage `probe.img`, then boot and grep `::/probe9d.log` for how many of the 0xE7 entries convert to OK.
+
+**NEXT-STEPS (round 44, LOCAL ONLY again):**
+1. Verify `::/sources/boot.wim` on the replica disk = the yd3ivfzx store build (mtime + content hash match against the store path). If not, re-mcopy and boot.
+2. Run probe9d again; every `0xE7000000` entry must either convert to OK or name a remaining hole.
+3. Once the 0xE7 cluster = OK, re-run probe5b (FlsHook FWUpdLcl H2OFFT-W WDFInst BiosImageProc msvcr90 mfc90u per-file WinVerifyTrust) — that's the ROUND-42 SHA-1 GATE: the raw-`0x00000008` must be REPLACED by real TRUST_E_* HRESULTs (era-matched trust evaluation), or 0 for the SHA-256-signed members.
+4. Optionally, batch H2OFFT-W.exe bundling BOTH sources of truth: 24H2 environment had H2OFFT-W pop RC=0 (silent-zero issue) — on 22H2 its whole companion set may load differently; only after probe5's verdict ask the user for the ONE hardware reboot to flash.
+5. Windows 24H2's variant STAYS: esdBase "modern-24h2" left selectable.
