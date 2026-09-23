@@ -560,3 +560,9 @@ NEXT: reconMode=false, real flash (user clicks the void dialog if it appears; AC
 **Design discipline to confirm}: cryptcatsvc needs to run; theWinPE has the registry entries but cryptcatsvc is not started; it's the same service story as round 30. All-only in the preFlashCommands.
 
 **Files (2026-09-23, all committed in .debug/hwreplica):** probe5.c/exe (WinVerifyTrust per companion), probe6.c/exe (catalog staged + verify), probe7.c/exe (CryptCATAdmin hash), autorun-probe5/6/7.cmd.
+
+**ROUNDS 38–39 (2026-09-23 evening, all local):**
+- probe8x (64-bit CryptCATAdmin): CryptCATAdminAcquireContext OK, hash computed fine on the 64-bit path (the 32-bit E_NOTIMPL is the missing 32-bit cryptcatsvc context); FlsHook.exe hash = FF917212EECA531A62D843C8A094C1B3EBCE99FA. CryptCATAdminAddCatalog succeeded ("addcatalog ok") but the ENUM lookup still fails rc=0x490 (ERROR_NO_MORE_ITEMS) - catroot2 stayed EMPTY (dir-listing empty); AddCatalog silently writes nowhere.
+- The WinPE 24H2 image ships WinSxS/Manifests/amd64_microsoft-windows-sf-cryptcat-winpe_*.manifest (service-framework catalog stub for WinPE) and cryptcatsvc exists ONLY as the amd64 dll. The 32-bit CryptCATAdminCalcHashFromFileHandle = E_NOTIMPL (0x80004001). H2OFFT-W is 32-bit and the tool's own WinVerifyTrust lands where ours lands.
+
+**NEXT ACTION (round 40, local): sequence - (a) stage the catalog via the 64-bit partner (probe8x addcatalog step) BEFORE the 32-bit probe5 run; (b) run probe5 with the catalog installed and see whether the 32-bit rc changes. If yes = the fix is '40-bit-AddCatalog then launch the flasher'. If not = the tool's file-verify path is SHA-1-chain-hard-rejected on this WinPE; the *tool's own* next check may be the same class.**
