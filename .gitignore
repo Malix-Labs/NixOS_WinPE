@@ -1,3 +1,5 @@
 result
 result-bin
 .debug/
+.direnv/
+.pre-commit-config.yaml
