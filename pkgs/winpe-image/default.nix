@@ -14,23 +14,38 @@
   hivex,
   gawk,
 
-  # BASE-ESD OVERLAY (2026-09-23, round 41): the 26100 (24H2) base rejects the
+  # Base-ESD selection (2026-09-23, round 41): the 26100 (24H2) base rejects the
   # 2008-era SHA-1 Authenticode chain of the vendor toolchain (RESEARCH-NOTES.md
   # rounds 32–40): WinPE 24H2 removed the legacy trust classes at the crypt layer
   # (E_NOTIMPL even through CryptCATAdmin's file hashing). Lenovo's own update
-  # utility runs its flashes from a 22621 (22H2)-class PE, where the same
-  # package's chain still validates, so the default here switches to the 22H2
-  # base - the 24H2 variant stays buildable for any guest binary that doesn't
-  # need that legacy SHA-1 layer.
-  esd ? {
-    version = "10.0.26100.4349";
-    url = "http://dl.delivery.mp.microsoft.com/filestreamingservice/files/009d9a0d-8e1a-45ce-9540-21377534803e/26100.4349.250607-1500.ge_release_svc_refresh_CLIENTCONSUMER_RET_x64FRE_en-us.esd";
-    hash = "sha256-yi0uVjuXAPe6BWnJ3AUyG4HhSVxS2gaGHD3IjvnObqs=";
-  },
-  # A 22H2-class override is handed in by profiles that want SHA-1-era trust.
-  # TODO (unblocks on ESD fetch): the 22621.3235 path with its own URL+hash.
+  # utility runs its flashes from a 22621 (22H2)-class PE, where the same package's
+  # chain still validates.
+  #
+  # Exposed as TWO package variants in flake.nix (see perSystem.packages):
+  #   winpe-image        = 24H2 (the newest Microsoft base; default kept for any
+  #                        future firmware tool that needs a modern base - e.g.
+  #                        a future SHA-256-signed vendor package),
+  #   winpe-image-legacy = 22H2 (the era-matching base for legacy 32-bit flashers).
+  # The profile picks the variant it needs; neither variant silently degrades the other.
+  esdBase ? "modern-24h2",
 }:
 let
+  # Base-ESD registry (Microsoft's own pinned dl.delivery URLs + published SHA-256s;
+  # provenance documented in RESEARCH-NOTES.md round 41). Select by KEY OR by
+  # passing your own { version,url,hash } attribute.
+  esdBases = {
+    "modern-24h2" = {
+      version = "10.0.26100.4349";
+      url = "http://dl.delivery.mp.microsoft.com/filestreamingservice/files/009d9a0d-8e1a-45ce-9540-21377534803e/26100.4349.250607-1500.ge_release_svc_refresh_CLIENTCONSUMER_RET_x64FRE_en-us.esd";
+      hash = "sha256-yi0uVjuXAPe6BWnJ3AUyG4HhSVxS2gaGHD3IjvnObqs=";
+    };
+    "legacy-22h2" = {
+      version = "10.0.22621.1702";
+      url = "http://dl.delivery.mp.microsoft.com/filestreamingservice/files/ec26d435-5d20-4563-9c75-b7726e55f93b/22621.1702.230505-1222.ni_release_svc_refresh_CLIENTCONSUMER_RET_x64FRE_en-us.esd";
+      hash = "sha256-c7SC2dhjunFhNgDOD9VR8VqdsY78yZG8M7TIw6mLOQ0=";
+    };
+  };
+  esd = if builtins.isAttrs esdBase then esdBase else esdBases.${esdBase} or esdBases."modern-24h2";
   version = esd.version;
   # ESD WinRE (the boot.wim base) is 32-bit-incapable: WinPE dropped WOW64 packaging after
   # Win10 2004 (RESEARCH-NOTES.md §0.6). The base is therefore the full-Windows image's own

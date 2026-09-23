@@ -70,6 +70,11 @@
           inherit (self) nixosModules diskoModules;
           winpe-flash = pkgs.callPackage ./pkgs/winpe-flash { };
           winpe-image = pkgs.callPackage ./pkgs/winpe-image { };
+          # Era-matched base for legacy 32-bit flashers: 22H2 (22621) keeps the
+          # SHA-1 Authenticode chains the 24H2 base removed (rounds 32–40).
+          winpe-image-legacy = pkgs.callPackage ./pkgs/winpe-image {
+            esdBase = "legacy-22h2";
+          };
           lenovo-legion-15ach6h-bios = pkgs.callPackage ./pkgs/lenovo-legion-bios { };
 
           evalNixos =
@@ -121,7 +126,12 @@
         in
         {
           packages = {
-            inherit winpe-flash winpe-image lenovo-legion-15ach6h-bios;
+            inherit
+              winpe-flash
+              winpe-image
+              winpe-image-legacy
+              lenovo-legion-15ach6h-bios
+              ;
             default = winpe-flash;
           };
 
