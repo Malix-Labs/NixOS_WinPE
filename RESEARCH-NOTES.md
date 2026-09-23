@@ -574,3 +574,18 @@ NEXT: reconMode=false, real flash (user clicks the void dialog if it appears; AC
 **Why this is the CORRECT path: the vendor's own Lenovo BIOS update utility runs in WinPE 22621 (Microsoft supported it until SHA-1 removal in 24H2). We would be restoring what the vendor intended.**
 
 **The gate remains: 'no user reboots unless the local replica shows a NEW tool behavior.' Test in round 41: the probe5 call on the 22H2 image should return a real TRUST_E-* result (not the raw 0x8) - meaning the SHA-1 chain is being evaluated.**
+
+## 0.15 ROUND 41 CHECKPOINT (2026-09-23/24, HEAD 9bbb896, dotfiles b4b57dc) — COMPACT-SAFE STATE — READ FIRST
+
+**Nothing uncommitted; both repos pushed. `winpe-image` now ships TWO variants (flake.packages):**
+- `winpe-image` = 24H2 base (26100.4349, default, UNCHANGED semantics - kept for any future modern-base firmware tool)
+- `winpe-image-legacy` = 22H2 base (22621.1702, ni_release 2023-05, ESD sha256=c7SC2dhjunFhNgDOD9VR8VqdsY78yZG8M7TIw6mLOQ0=, hash-verified before store ingest), selected in the derivation via `esdBase ? "modern-24h2"` arg with an esdBases registry (`modern-24h2` / `legacy-22h2`, or your own { version,url,hash } attrs). DEPLOYED BUILD: the legacy variant boots through the whole existing graft chain (WOW64/SxS/api-set/forwarder/sidecar/sxs-winners installChecks all pass on the 22H2 base) — boot.wim 605,799,403 bytes LZX at .debug/img-22h2.
+- The round-41 code dive that got us here: sxsFamilyRegex was DEAD since the first commit (git -S verifies: defined in 6347582, never consumed; every consumer uses explicit case-sensitive 7z globs); file header had a broken let-binding (missing `}:`) that made nil/nixd scream — FIXED with the `esdBase` arg + esdBases registry keys pattern; `esdBase = "legacy-22h2"` passes only a STRING key (attrs also allowed).
+
+**NEXT SESSION's first work (round 42, all local, no user reboot until the gate fires):**
+1. Build the 22H2-based replica image: `.debug/img-22h2/sources/boot.wim` + inject winpeshl/startnet (same wimupdate commands; winpe-flash passthru paths: `nix eval --raw .#packages.x86_64-linux.winpe-flash.{winpeshlIni,startnetScript}`), stage with `stage2.sh` + `boot-replica.sh` (WIM_FILE=boot-new22.wim AUTORUN_FILE=$PWD/autorun-probe5.cmd BIOS=.debug/bios-result30 EXTRAS="$PWD/probe5.exe").
+2. Read `::/probe5.log` from the ESP: the expectation on the 22H2 base is that trust FAILS with a real TRUST_E_* code (NOT the raw 0x00000008) for FlsHook.exe — if it FAILS with a named SHAs/code, or if H2OFFT-W's own signature gate now PASSES (rc=0), that decides the next lever.
+3. THEN decide the fix chassis: (a) if 22H2 still lacks trust for the vendor chain: same class, deeper (catalog install now with a LIVE 32-bit cryptcatsvc hash path — retest probe7/8x after the base swap); (b) if probe5 returns 0 for the vendor companions or H2OFFT-W starts the real flash stage in the 22H2 image, pre-arm the real flash (reconMode=false, AC plugged) and schedule the user boot (ONE — hardware the flash).
+4. Windows 24H2's package must STAY selectable (esdBase = "modern-24h2") — user explicitly wants the modern base preserved for other firmware work.
+
+**Standing user contract (unchanged, 2026-09-24):** one hypothesis per reboot; QEMU-local gate BEFORE any user reboot; official binaries only (the one committed forwarder-shim exception is user-approved); all commits+pushes logged; no tag yet without explicit user approval.
