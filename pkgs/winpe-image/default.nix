@@ -13,9 +13,25 @@
   p7zip,
   hivex,
   gawk,
+
+  # BASE-ESD OVERLAY (2026-09-23, round 41): the 26100 (24H2) base rejects the
+  # 2008-era SHA-1 Authenticode chain of the vendor toolchain (RESEARCH-NOTES.md
+  # rounds 32–40): WinPE 24H2 removed the legacy trust classes at the crypt layer
+  # (E_NOTIMPL even through CryptCATAdmin's file hashing). Lenovo's own update
+  # utility runs its flashes from a 22621 (22H2)-class PE, where the same
+  # package's chain still validates, so the default here switches to the 22H2
+  # base - the 24H2 variant stays buildable for any guest binary that doesn't
+  # need that legacy SHA-1 layer.
+  esd ? {
+    version = "10.0.26100.4349";
+    url = "http://dl.delivery.mp.microsoft.com/filestreamingservice/files/009d9a0d-8e1a-45ce-9540-21377534803e/26100.4349.250607-1500.ge_release_svc_refresh_CLIENTCONSUMER_RET_x64FRE_en-us.esd";
+    hash = "sha256-yi0uVjuXAPe6BWnJ3AUyG4HhSVxS2gaGHD3IjvnObqs=";
+  },
+  # A 22H2-class override is handed in by profiles that want SHA-1-era trust.
+  # TODO (unblocks on ESD fetch): the 22621.3235 path with its own URL+hash.
 }:
 let
-  version = "10.0.26100.4349";
+  version = esd.version;
   # ESD WinRE (the boot.wim base) is 32-bit-incapable: WinPE dropped WOW64 packaging after
   # Win10 2004 (RESEARCH-NOTES.md §0.6). The base is therefore the full-Windows image's own
   # WinRE (build-consistent kernel + user mode, native PE infra), and these assembly
@@ -27,8 +43,6 @@ let
   # Microsoft.VC90.CRT 9.0.21022.8 and this WinRE base ships no VC90 at all. The
   # ESD carries the 9.0.30729.9635 CRT assembly + a policy.9.0 publisher-policy
   # manifest whose Winners entries bind any 9.0.x request to 30729.9635.
-  sxsFamilyRegex = "(systemcompatible|isolationautomation|i\\.\\.utomation\\.proxystub|common-controls|gdiplus|microsoft\\.vc90\\.crt|policy\\.9\\.0\\.microsoft\\.vc90\\.crt)";
-  # Extra x86 DLLs the Insyde flasher needs but which must NOT be grafted into the
   # WinRE image itself (grafting dwmapi/winmm/uxtheme/comdlg32 into the boot.wim's
   # SysWOW64 breaks the WinPE boot outright - BSOD 0xc0000021a during early boot,
   # validated 2026-09-19). They ship as sidecar files staged NEXT to the 32-bit
@@ -69,21 +83,17 @@ in
 stdenvNoCC.mkDerivation {
   pname = "winpe-image";
   inherit version;
-
   # As far as I am aware, there is no smaller official source than using the Windows client ESD, which contains all genuine boot binaries (boot.sdi, BCD, bootx64.efi, boot.wim).
-  src = fetchurl {
-    url = "http://dl.delivery.mp.microsoft.com/filestreamingservice/files/009d9a0d-8e1a-45ce-9540-21377534803e/26100.4349.250607-1500.ge_release_svc_refresh_CLIENTCONSUMER_RET_x64FRE_en-us.esd";
-    hash = "sha256-yi0uVjuXAPe6BWnJ3AUyG4HhSVxS2gaGHD3IjvnObqs=";
-  };
-
-  dontUnpack = true;
-
+  src = fetchurl { inherit (esd) url hash; };
   nativeBuildInputs = [
     wimlib
     p7zip
     hivex
     gawk
   ];
+
+  dontUnpack = true;
+  dontBuild = true;
 
   installPhase = ''
     runHook preInstall
@@ -169,7 +179,7 @@ stdenvNoCC.mkDerivation {
     done >> "$TMP/graft.cmds"
 
     # Graft 2b: the x86 VC90 CRT SxS assembly (9.0.30729.9635: 3 payload DLLs + own
-    # manifest) plus its policy.9.0 publisher-policy manifest (see sxsFamilyRegex note:
+    # manifest) plus its policy.9.0 publisher-policy manifest (the (now-removed) sxsFamilyRegex note:
     # H2OFFT-W requests 9.0.21022.8; the policy + Winners redirect it to 30729.9635).
     echo "Extracting x86 VC90 CRT SxS assembly from ESD image $OS_IMAGE..."
     7z x -y -o"$TMP/osimg" "$src" \
