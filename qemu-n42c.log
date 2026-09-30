@@ -1,0 +1,1 @@
+qemu-system-x86_64: -drive if=pflash,format=raw,file=VARSn42.fd: Could not open 'VARSn42.fd': No such file or directory
