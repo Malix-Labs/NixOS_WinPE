@@ -63,25 +63,31 @@ let
   # validated 2026-09-19). They ship as sidecar files staged NEXT to the 32-bit
   # flasher, where the loader resolves them before the system directories.
   wow64SidecarFiles = [
-    "comdlg32.dll"
-    "dwmapi.dll"
     "gdi32full.dll"
-    "uxtheme.dll"
-    "winmm.dll"
   ];
   coreWow64Files = [
     "advapi32.dll"
+    "bcryptprimitives.dll"
+    "cryptbase.dll"
     "gdi32.dll"
     "kernel32.dll"
     "KernelBase.dll"
+    "msasn1.dll"
+    "msvcp_win.dll"
     "msvcrt.dll"
+    "ntdll.dll"
     "ole32.dll"
     "rpcrt4.dll"
     "sechost.dll"
     "shell32.dll"
     "shlwapi.dll"
     "user32.dll"
+    "version.dll"
+    # UCRT lives at SysWOW64/downlevel/ucrtbase.dll on 22621-class ESDs (22621's
+    # WinRE base ships it ONLY downlevel; 26100 WinRE upgrades it to SysWOW64 root).
+    "downlevel/ucrtbase.dll"
     "wldp.dll"
+    "wintrust.dll"
     "cmd.exe"
   ];
   requiredWimPaths =
@@ -93,7 +99,7 @@ let
       "wow64win.dll"
     ])
     ++ (map (f: "/Windows/SysWOW64/${f}") coreWow64Files)
-    ++ [ "/Windows/sxs-winners.cmd" ];
+    ++ [ "/Windows/SysWOW64/ucrtbase.dll" "/Windows/sxs-winners.cmd" ];
 in
 stdenvNoCC.mkDerivation {
   pname = "winpe-image";
@@ -164,8 +170,9 @@ stdenvNoCC.mkDerivation {
       echo "add $OSI/Windows/System32/$f /Windows/System32/$f"
     done > "$TMP/graft.cmds"
     for f in ${lib.concatStringsSep " " coreWow64Files}; do
+      WIMDEST="/Windows/SysWOW64/$(basename "$f")"
       [ -s "$OSI/Windows/SysWOW64/$f" ] || { echo "ERROR: ESD image $OS_IMAGE lost SysWOW64/$f (core 32-bit runtime)" >&2; exit 1; }
-      echo "add $OSI/Windows/SysWOW64/$f /Windows/SysWOW64/$f"
+      echo "add $OSI/Windows/SysWOW64/$f $WIMDEST"
     done >> "$TMP/graft.cmds"
 
     # Graft 2: the x86 SxS runtime assembly family (all versions present; the SxS binder
