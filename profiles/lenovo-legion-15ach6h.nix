@@ -26,6 +26,11 @@ in
   config = {
     hardware.winpe = {
       enable = lib.mkDefault true;
+      # Round 49: the FRESH-24H2 base (winpe-image, 26100.4349 ESD) is the ERA-VALID
+      # environment for the 32-bit SHA-1 Authenticode chain (probe15 = 0x0 on the
+      # fresh 24H2 replica; the 22H2-era fork refuses with raw 0x00000008 — round 46).
+      # winpe-image-legacy stays in the flake as an era-fork for other firmware tools.
+      imagePackage = pkgs.callPackage ../pkgs/winpe-image { esdBase = "modern-24h2"; };
       # The winpe-flash nonInteractive flow is the one with the explicit HUMAN PAUSE
       # + single ENTER (no typed commands); interactive/config mode drops to cmd.exe
       # which requires typing "wpeutil reboot" - unsafe with unknown keyboard layout

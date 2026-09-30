@@ -67,7 +67,10 @@ let
   ];
   coreWow64Files = [
     "advapi32.dll"
+    "bcrypt.dll"
     "bcryptprimitives.dll"
+    "combase.dll"
+    "crypt32.dll"
     "cryptbase.dll"
     "gdi32.dll"
     "kernel32.dll"
@@ -99,7 +102,10 @@ let
       "wow64win.dll"
     ])
     ++ (map (f: "/Windows/SysWOW64/${f}") coreWow64Files)
-    ++ [ "/Windows/SysWOW64/ucrtbase.dll" "/Windows/sxs-winners.cmd" ];
+    ++ [
+      "/Windows/SysWOW64/ucrtbase.dll"
+      "/Windows/sxs-winners.cmd"
+    ];
 in
 stdenvNoCC.mkDerivation {
   pname = "winpe-image";
