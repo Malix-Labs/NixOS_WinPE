@@ -136,6 +136,7 @@ pkgs.writeShellApplication {
       echo "  status      Check WinPE partition, firmware payload, and UEFI boot status"
       echo "  logs        Show the execution transcript log from the last WinPE boot"
       echo "  arm         Inject startup hook into boot.wim and set UEFI BootNext"
+      echo "  dearm       Clear the pending UEFI BootNext (cancel a scheduled flash boot)"
       echo "  reboot      Trigger a one-time boot into WinPE on next restart"
       echo "  help        Show this help message"
     }
@@ -213,6 +214,25 @@ pkgs.writeShellApplication {
       fi
     }
 
+    cmd_dearm() {
+      if [ -z "''${EFIBOOTMGR_BIN:-}" ] && [ "''${EUID:-$(id -u)}" -ne 0 ]; then
+        echo "❌ Error: Modifying UEFI boot variables requires root privileges."
+        echo "Please run: sudo winpe-flash dearm"
+        return 1
+      fi
+
+      EFIBOOTMGR="''${EFIBOOTMGR_BIN:-efibootmgr}"
+
+      CURRENT_BOOTNEXT=$($EFIBOOTMGR | grep -i "BootNext" | grep -o -m1 "[0-9a-fA-F]\{4\}" || :)
+      if [ -z "$CURRENT_BOOTNEXT" ]; then
+        echo "BootNext is not set. Nothing to de-arm."
+      else
+        echo "Clearing BootNext (was Boot$CURRENT_BOOTNEXT)..."
+        $EFIBOOTMGR -N
+        echo "BootNext cleared. No one-shot boot pending."
+      fi
+    }
+
     cmd_reboot() {
       echo "=== Triggering WinPE One-Time Boot ==="
 
@@ -270,6 +290,9 @@ pkgs.writeShellApplication {
         ;;
       arm)
         cmd_arm
+        ;;
+      dearm)
+        cmd_dearm
         ;;
       reboot)
         cmd_reboot
